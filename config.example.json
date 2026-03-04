@@ -1,0 +1,10 @@
+{
+  "target_address": "00:11:22:33:44:55",
+  "target_pin": "0000",
+  "device_name": "PiBTBridge",
+  "log_level": "INFO",
+  "log_file": "/var/log/bt-bridge.log",
+  "buffer_size": 4096,
+  "reconnect_max_delay": 30,
+  "status_socket": "/var/run/bt-bridge.sock"
+}

@@ -1,0 +1,28 @@
+[Unit]
+Description=Bluetooth LE to Classic Bridge Daemon
+Documentation=https://github.com/youruser/pi-bt-bridge
+After=bluetooth.target
+Requires=bluetooth.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m src.main
+WorkingDirectory=/opt/bt-bridge
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/run/bt-bridge.sock /etc/bt-bridge
+
+# Run as root for Bluetooth access (or create dedicated user with bluetooth group)
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

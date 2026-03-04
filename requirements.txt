@@ -1,0 +1,7 @@
+# Pi BT Bridge - Runtime Dependencies
+# Generated from pyproject.toml
+# Install with: pip install -r requirements.txt
+
+bless>=0.3.0
+dbus-python>=1.3.2
+PyGObject>=3.42.0
