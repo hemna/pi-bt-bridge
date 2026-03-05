@@ -467,6 +467,19 @@ async def main():
     subprocess.run(["sudo", "hciconfig", "hci0", "name", "PiBTBridge"], capture_output=True)
     subprocess.run(["bluetoothctl", "system-alias", "PiBTBridge"], capture_output=True)
 
+    # Start a bluetoothctl agent to handle pairing requests
+    # This must stay running to auto-accept BLE pairing
+    log("Starting Bluetooth pairing agent...")
+    agent_proc = subprocess.Popen(
+        ["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    # Register as NoInputNoOutput agent (auto-accepts pairing)
+    agent_proc.stdin.write(b"agent NoInputNoOutput\n")
+    agent_proc.stdin.write(b"default-agent\n")
+    agent_proc.stdin.flush()
+    await asyncio.sleep(1)
+    log("Bluetooth agent registered")
+
     # Start web server
     web_runner = await start_web_server()
 
