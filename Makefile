@@ -102,7 +102,10 @@ install-dev: ## Install development dependencies locally
 pi-shell: ## Open SSH shell to Pi
 	ssh $(PI_HOST)
 
-pi-config: ## Edit config on Pi
+pi-configure: ## Run interactive configuration wizard on Pi
+	ssh -t $(PI_HOST) "cd $(PI_DIR) && sudo ./scripts/configure.sh"
+
+pi-config: ## Edit config on Pi (manual)
 	ssh -t $(PI_HOST) "sudo nano /etc/bt-bridge/config.json"
 
 pi-restart: ## Restart daemon on Pi
