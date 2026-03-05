@@ -1,0 +1,13 @@
+[Unit]
+Description=Unblock Bluetooth RF-kill on boot
+DefaultDependencies=no
+Before=bluetooth.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/rfkill unblock bluetooth
+RemainAfterExit=yes
+
+[Install]
+WantedBy=bluetooth.target

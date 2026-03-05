@@ -5,6 +5,7 @@ set -e
 INSTALL_DIR="/opt/bt-bridge"
 CONFIG_DIR="/etc/bt-bridge"
 SERVICE_FILE="/etc/systemd/system/bt-bridge.service"
+BT_UNBLOCK_SERVICE="/etc/systemd/system/bluetooth-unblock.service"
 
 echo "Installing BT Bridge daemon..."
 
@@ -29,7 +30,14 @@ if [ ! -f "$CONFIG_DIR/config.json" ]; then
     fi
 fi
 
-# Install systemd service
+# Install Bluetooth unblock service (fixes RF-kill on boot)
+if [ -f systemd/bluetooth-unblock.service ]; then
+    cp systemd/bluetooth-unblock.service "$BT_UNBLOCK_SERVICE"
+    systemctl enable bluetooth-unblock.service
+    echo "Installed bluetooth-unblock service"
+fi
+
+# Install main systemd service
 cp systemd/bt-bridge.service "$SERVICE_FILE"
 systemctl daemon-reload
 
