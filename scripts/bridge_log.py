@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
-"""Bridge with packet logging for debugging."""
+"""Bridge with packet logging and web interface for debugging."""
 
 import asyncio
+import json
 import subprocess
 import socket  # Raw socket for TX (works!)
 import bluetooth  # PyBluez for RX (required for receiving)
 from datetime import datetime
+from pathlib import Path
 from bless import BlessServer, GATTCharacteristicProperties, GATTAttributePermissions
+
+# Try to import aiohttp for web interface
+try:
+    from aiohttp import web
+
+    HAS_WEB = True
+except ImportError:
+    HAS_WEB = False
+    print("Warning: aiohttp not installed, web interface disabled")
 
 NUS_SERVICE = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 NUS_TX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -16,6 +27,9 @@ NUS_RX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 TH_D74_MAC = "24:71:89:8D:26:EF"
 SPP_UUID = "00001101-0000-1000-8000-00805F9B34FB"
 SPP_CHANNEL = 2  # TH-D74 SPP channel
+
+# Web server port
+WEB_PORT = 8080
 
 # KISS Protocol Constants
 KISS_FEND = 0xC0  # Frame End
@@ -34,6 +48,17 @@ rfcomm_tx = None  # Raw socket for TX (this works for transmitting)
 rfcomm_rx = None  # PyBluez socket for RX (required for receiving)
 server = None
 log_file = None
+
+# Statistics
+stats = {
+    "started_at": None,
+    "packets_tx": 0,
+    "packets_rx": 0,
+    "bytes_tx": 0,
+    "bytes_rx": 0,
+    "ble_connected": False,
+    "classic_connected": False,
+}
 
 
 def log(msg):
@@ -64,54 +89,18 @@ def decode_kiss(data):
     return f"Raw: {len(data)} bytes"
 
 
-def configure_kiss_parameters(sock):
-    """
-    Configure TNC with KISS parameters after connection.
-
-    Sends TX delay, slot time, and TX tail settings. This may be required
-    for some TNCs (like TH-D74) to properly recognize the Bluetooth connection.
-    Based on Android app's configureKissParameters() function.
-    """
-    import time
-
-    log("Configuring KISS parameters...")
-
-    # Set TX delay (time to wait after keying before sending data)
-    # 500ms = 50 units (in 10ms units)
-    txdelay_units = DEFAULT_TXDELAY_MS // 10
-    txdelay_cmd = bytes([KISS_FEND, KISS_CMD_TXDELAY, txdelay_units, KISS_FEND])
-    log(f"  Setting TXDELAY to {DEFAULT_TXDELAY_MS}ms ({txdelay_units} units)")
-    sock.send(txdelay_cmd)
-    time.sleep(KISS_COMMAND_DELAY_S)
-
-    # Set slot time (interval between channel checks)
-    # 100ms = 10 units (in 10ms units)
-    slot_time_units = DEFAULT_SLOT_TIME_MS // 10
-    slot_time_cmd = bytes([KISS_FEND, KISS_CMD_SLOT_TIME, slot_time_units, KISS_FEND])
-    log(f"  Setting SLOT_TIME to {DEFAULT_SLOT_TIME_MS}ms ({slot_time_units} units)")
-    sock.send(slot_time_cmd)
-    time.sleep(KISS_COMMAND_DELAY_S)
-
-    # Set TX tail (time to keep transmitter keyed after data)
-    # 50ms = 5 units (in 10ms units)
-    tx_tail_units = DEFAULT_TX_TAIL_MS // 10
-    tx_tail_cmd = bytes([KISS_FEND, KISS_CMD_TX_TAIL, tx_tail_units, KISS_FEND])
-    log(f"  Setting TX_TAIL to {DEFAULT_TX_TAIL_MS}ms ({tx_tail_units} units)")
-    sock.send(tx_tail_cmd)
-    time.sleep(KISS_COMMAND_DELAY_S)
-
-    log("KISS parameters configured successfully!")
-
-
 def ble_write(char, value, **kwargs):
     global rfcomm_tx
     data = bytes(value)
     log(f"iPhone -> TNC: {len(data)} bytes")
     log(f"  Hex: {data.hex()}")
     log(f"  {decode_kiss(data)}")
+    stats["ble_connected"] = True
     if rfcomm_tx:
         try:
             sent = rfcomm_tx.send(data)
+            stats["packets_tx"] += 1
+            stats["bytes_tx"] += sent
             log(f"  -> Forwarded to TH-D74 via RAW socket! ({sent} bytes sent)")
         except Exception as e:
             log(f"  ERROR sending to TNC: {e}")
@@ -143,6 +132,8 @@ async def tnc_reader():
                 log(f"TNC -> iPhone: {len(data)} bytes")
                 log(f"  Hex: {data.hex()}")
                 log(f"  {decode_kiss(data)}")
+                stats["packets_rx"] += 1
+                stats["bytes_rx"] += len(data)
                 if server:
                     char = server.get_characteristic(NUS_RX)
                     if char:
@@ -154,13 +145,126 @@ async def tnc_reader():
             break
 
 
+# --- Web Interface ---
+
+
+async def handle_index(request):
+    """Serve the main status page."""
+    uptime = 0
+    if stats["started_at"]:
+        uptime = (datetime.now() - stats["started_at"]).total_seconds()
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Pi BT Bridge</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {{ font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .card {{ background: #f5f5f5; border-radius: 8px; padding: 15px; margin: 10px 0; }}
+        .status {{ display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 14px; }}
+        .connected {{ background: #d4edda; color: #155724; }}
+        .disconnected {{ background: #f8d7da; color: #721c24; }}
+        h1 {{ color: #333; }}
+        h3 {{ margin: 0 0 10px 0; color: #666; }}
+        .stat {{ display: inline-block; text-align: center; padding: 10px 20px; }}
+        .stat-value {{ font-size: 24px; font-weight: bold; }}
+        .stat-label {{ font-size: 12px; color: #666; }}
+    </style>
+</head>
+<body>
+    <h1>Pi BT Bridge</h1>
+    
+    <div class="card">
+        <h3>Connections</h3>
+        <p>BLE (Phone): <span class="status {"connected" if stats["ble_connected"] else "disconnected"}">
+            {"Connected" if stats["ble_connected"] else "Waiting"}</span></p>
+        <p>Classic (TNC): <span class="status {"connected" if stats["classic_connected"] else "disconnected"}">
+            {"Connected" if stats["classic_connected"] else "Disconnected"}</span></p>
+        <p>Target: <code>{TH_D74_MAC}</code> (RFCOMM {SPP_CHANNEL})</p>
+    </div>
+    
+    <div class="card">
+        <h3>Statistics</h3>
+        <div class="stat">
+            <div class="stat-value">{stats["packets_tx"]}</div>
+            <div class="stat-label">Packets TX</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">{stats["packets_rx"]}</div>
+            <div class="stat-label">Packets RX</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">{stats["bytes_tx"]}</div>
+            <div class="stat-label">Bytes TX</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">{stats["bytes_rx"]}</div>
+            <div class="stat-label">Bytes RX</div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>System</h3>
+        <p>Uptime: {int(uptime)}s</p>
+        <p>Version: 1.0.0</p>
+    </div>
+    
+    <script>setTimeout(() => location.reload(), 5000);</script>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_api_status(request):
+    """Return JSON status."""
+    uptime = 0
+    if stats["started_at"]:
+        uptime = (datetime.now() - stats["started_at"]).total_seconds()
+
+    return web.json_response(
+        {
+            "ble_connected": stats["ble_connected"],
+            "classic_connected": stats["classic_connected"],
+            "target_address": TH_D74_MAC,
+            "rfcomm_channel": SPP_CHANNEL,
+            "packets_tx": stats["packets_tx"],
+            "packets_rx": stats["packets_rx"],
+            "bytes_tx": stats["bytes_tx"],
+            "bytes_rx": stats["bytes_rx"],
+            "uptime_seconds": uptime,
+        }
+    )
+
+
+async def start_web_server():
+    """Start the web server."""
+    if not HAS_WEB:
+        return None
+
+    app = web.Application()
+    app.router.add_get("/", handle_index)
+    app.router.add_get("/api/status", handle_api_status)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", WEB_PORT)
+    await site.start()
+    log(f"Web interface started on http://0.0.0.0:{WEB_PORT}")
+    return runner
+
+
 async def main():
     global rfcomm_tx, rfcomm_rx, server, log_file
 
+    stats["started_at"] = datetime.now()
     log_file = open("/tmp/bridge_packets.log", "w")
 
     subprocess.run(["sudo", "hciconfig", "hci0", "name", "PiBTBridge"], capture_output=True)
     subprocess.run(["bluetoothctl", "system-alias", "PiBTBridge"], capture_output=True)
+
+    # Start web server
+    web_runner = await start_web_server()
 
     # DISCOVERY: Raw socket works for TX, PyBluez works for RX
     # Try connecting raw socket FIRST, then see if PyBluez can also connect
@@ -172,25 +276,27 @@ async def main():
     try:
         rfcomm_tx.connect((TH_D74_MAC, SPP_CHANNEL))
         rfcomm_tx.settimeout(None)
+        stats["classic_connected"] = True
         log("Raw TX socket CONNECTED!")
     except Exception as e:
         log(f"Failed to connect raw TX socket: {e}")
-        return
+        stats["classic_connected"] = False
+        # Don't return - keep web server running for status
 
     # Skip KISS parameters - they might be interfering
-    # configure_kiss_parameters(rfcomm_tx)
     log("Skipping KISS parameter configuration (testing)")
 
     # 2. Try to connect PyBluez socket for RECEIVING
-    log("Attempting PyBluez socket for RX...")
-    try:
-        rfcomm_rx = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-        rfcomm_rx.connect((TH_D74_MAC, SPP_CHANNEL))
-        log("PyBluez RX socket CONNECTED!")
-    except Exception as e:
-        log(f"PyBluez RX socket failed (expected): {e}")
-        log("Using raw socket for both TX and RX")
-        rfcomm_rx = rfcomm_tx
+    if stats["classic_connected"]:
+        log("Attempting PyBluez socket for RX...")
+        try:
+            rfcomm_rx = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+            rfcomm_rx.connect((TH_D74_MAC, SPP_CHANNEL))
+            log("PyBluez RX socket CONNECTED!")
+        except Exception as e:
+            log(f"PyBluez RX socket failed (expected): {e}")
+            log("Using raw socket for both TX and RX")
+            rfcomm_rx = rfcomm_tx
 
     log("Starting BLE server...")
     server = BlessServer(name="PiBTBridge", loop=None)
@@ -244,12 +350,15 @@ async def main():
     log("=" * 60)
     log("BRIDGE READY!")
     log("  iPhone <--BLE--> Pi <--RFCOMM--> TH-D74")
+    log(f"  Web interface: http://<pi-ip>:{WEB_PORT}")
     log("Connect from iPhone and send a packet!")
     log("=" * 60)
     log("")
 
-    # Start TNC reader task
-    reader_task = asyncio.create_task(tnc_reader())
+    # Start TNC reader task if connected
+    reader_task = None
+    if stats["classic_connected"] and rfcomm_rx:
+        reader_task = asyncio.create_task(tnc_reader())
 
     # Run indefinitely (for systemd service)
     try:
@@ -258,11 +367,15 @@ async def main():
     except asyncio.CancelledError:
         pass
 
-    reader_task.cancel()
-    rfcomm_rx.close()
+    if reader_task:
+        reader_task.cancel()
+    if rfcomm_rx:
+        rfcomm_rx.close()
     if rfcomm_tx and rfcomm_tx != rfcomm_rx:
         rfcomm_tx.close()
     await server.stop()
+    if web_runner:
+        await web_runner.cleanup()
     log_file.close()
     log("Bridge stopped")
 
