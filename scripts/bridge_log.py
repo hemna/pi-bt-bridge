@@ -498,32 +498,123 @@ async def main():
     await server.add_gatt(gatt)
     await server.start()
 
-    # Wait a moment for bless/BlueZ to settle
-    await asyncio.sleep(1)
+    # Set up BLE advertising using raw HCI commands
+    # Must disable advertising first, then set parameters, then re-enable
+    log("Configuring BLE advertising via raw HCI...")
 
-    # Set up BLE advertising using bluetoothctl
-    # This registers a proper advertisement with BlueZ that iOS can see
-    log("Configuring BLE advertising...")
-
-    # Use bluetoothctl to set up advertising with NUS UUID
-    # Run in a subprocess that stays alive to keep the advertisement active
-    adv_script = """
-menu advertise
-name PiBTBridge  
-uuids 6e400001-b5a3-f393-e0a9-e50e24dcca9e
-discoverable on
-back
-advertise peripheral
-"""
-    # Start bluetoothctl with advertisement config
-    adv_proc = subprocess.Popen(
-        ["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    # 1. Disable any existing advertising
+    subprocess.run(
+        ["sudo", "hcitool", "-i", "hci0", "cmd", "0x08", "0x000A", "00"],
+        capture_output=True,
+        timeout=5,
     )
-    adv_proc.stdin.write(adv_script.encode())
-    adv_proc.stdin.flush()
-    # Don't close stdin - keep process alive to maintain advertisement
-    await asyncio.sleep(2)
-    log("BLE advertising configured via bluetoothctl")
+    await asyncio.sleep(0.5)
+
+    # 2. Set advertising parameters (ADV_IND - connectable undirected)
+    subprocess.run(
+        [
+            "sudo",
+            "hcitool",
+            "-i",
+            "hci0",
+            "cmd",
+            "0x08",
+            "0x0006",
+            "20",
+            "00",
+            "40",
+            "00",  # Min/max interval
+            "00",  # ADV_IND
+            "00",
+            "00",  # Own/peer address type
+            "00",
+            "00",
+            "00",
+            "00",
+            "00",
+            "00",  # Peer address
+            "07",
+            "00",
+        ],  # Channel map, filter
+        capture_output=True,
+        timeout=5,
+    )
+
+    # 3. Set advertising data: Flags + Complete Local Name "PiBTBridge"
+    subprocess.run(
+        [
+            "sudo",
+            "hcitool",
+            "-i",
+            "hci0",
+            "cmd",
+            "0x08",
+            "0x0008",
+            "0E",  # Length
+            "02",
+            "01",
+            "06",  # Flags: General Discoverable
+            "0B",
+            "09",  # Length + Complete Local Name type
+            "50",
+            "69",
+            "42",
+            "54",
+            "42",
+            "72",
+            "69",
+            "64",
+            "67",
+            "65",
+        ],  # "PiBTBridge"
+        capture_output=True,
+        timeout=5,
+    )
+
+    # 4. Set scan response with NUS UUID (128-bit little-endian)
+    subprocess.run(
+        [
+            "sudo",
+            "hcitool",
+            "-i",
+            "hci0",
+            "cmd",
+            "0x08",
+            "0x0009",
+            "12",  # Length
+            "11",
+            "07",  # Length + Complete 128-bit UUIDs type
+            "9E",
+            "CA",
+            "DC",
+            "24",
+            "0E",
+            "E5",
+            "A9",
+            "E0",
+            "93",
+            "F3",
+            "A3",
+            "B5",
+            "01",
+            "00",
+            "40",
+            "6E",
+        ],
+        capture_output=True,
+        timeout=5,
+    )
+
+    # 5. Enable advertising
+    result = subprocess.run(
+        ["sudo", "hcitool", "-i", "hci0", "cmd", "0x08", "0x000A", "01"],
+        capture_output=True,
+        timeout=5,
+    )
+    if b"20 00" in result.stdout:
+        log("BLE advertising enabled successfully")
+    else:
+        log(f"BLE advertising result: {result.stdout.decode() if result.stdout else 'no output'}")
 
     log("")
     log("=" * 60)
