@@ -1,37 +1,35 @@
-"""Bluetooth Classic SPP service using dbus-python."""
+"""Bluetooth Classic SPP service using direct RFCOMM socket."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
+import socket
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from src.models.connection import ClassicConnection
 from src.models.state import ConnectionState
-
-if TYPE_CHECKING:
-    import dbus
 
 
 # SPP Service UUID
 SPP_SERVICE_UUID: Final[str] = "00001101-0000-1000-8000-00805F9B34FB"
 
-# D-Bus paths
-BLUEZ_SERVICE: Final[str] = "org.bluez"
-ADAPTER_PATH: Final[str] = "/org/bluez/hci0"
-PROFILE_PATH: Final[str] = "/org/bluez/profile/spp"
+# Default RFCOMM channel for SPP
+DEFAULT_RFCOMM_CHANNEL: Final[int] = 1
 
 logger = logging.getLogger("bt-bridge.classic")
 
 
 class ClassicService:
     """
-    Bluetooth Classic SPP client service using D-Bus/BlueZ.
+    Bluetooth Classic SPP client service using direct RFCOMM socket.
 
     Connects to a target TNC device over Serial Port Profile (SPP)
     and provides a byte stream interface for KISS frame communication.
+
+    Uses Python's socket module with BTPROTO_RFCOMM for direct connection,
+    which is more reliable than the D-Bus profile approach for many devices.
     """
 
     def __init__(
@@ -39,6 +37,7 @@ class ClassicService:
         target_address: str,
         target_pin: str = "0000",
         reconnect_max_delay: int = 30,
+        rfcomm_channel: int = DEFAULT_RFCOMM_CHANNEL,
         connection: ClassicConnection | None = None,
     ) -> None:
         """
@@ -46,18 +45,20 @@ class ClassicService:
 
         Args:
             target_address: Target device MAC address.
-            target_pin: Pairing PIN.
+            target_pin: Pairing PIN (used for reference, pairing should be done beforehand).
             reconnect_max_delay: Maximum reconnect delay in seconds.
+            rfcomm_channel: RFCOMM channel to connect to (default: 1).
             connection: Connection state object.
         """
         self._target_address = target_address
         self._target_pin = target_pin
         self._reconnect_max_delay = reconnect_max_delay
+        self._rfcomm_channel = rfcomm_channel
         self._connection = connection or ClassicConnection(target_address=target_address)
 
-        self._bus: dbus.SystemBus | None = None
-        self._fd: int | None = None
+        self._socket: socket.socket | None = None
         self._reader_task: asyncio.Task[None] | None = None
+        self._reconnect_task: asyncio.Task[None] | None = None
         self._on_data_received: Callable[[bytes], None] | None = None
         self._on_state_changed: Callable[[ConnectionState], None] | None = None
         self._running = False
@@ -70,7 +71,7 @@ class ClassicService:
     @property
     def is_connected(self) -> bool:
         """Check if connected to TNC."""
-        return self._connection.is_connected
+        return self._connection.is_connected and self._socket is not None
 
     def set_data_callback(self, callback: Callable[[bytes], None]) -> None:
         """Set callback for received data."""
@@ -84,40 +85,30 @@ class ClassicService:
         """
         Start the Classic SPP service and connect to target.
 
-        Registers SPP profile with BlueZ and initiates connection.
+        Uses direct RFCOMM socket connection.
         """
-        try:
-            import dbus
-            import dbus.mainloop.glib
+        logger.info(
+            "Starting Classic service, target: %s channel: %d",
+            self._target_address,
+            self._rfcomm_channel,
+        )
 
-            logger.info(
-                "Starting Classic service, target: %s",
-                self._target_address,
-            )
-
-            # Initialize D-Bus
-            dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-            self._bus = dbus.SystemBus()
-
-            # Register SPP profile
-            await self._register_profile()
-
-            # Start connection
-            self._running = True
-            await self._connect()
-
-        except ImportError:
-            logger.error("dbus-python library not installed")
-            raise
-        except Exception as e:
-            logger.error("Failed to start Classic service: %s", e)
-            self._update_state(ConnectionState.ERROR)
-            raise
+        self._running = True
+        await self._connect()
 
     async def stop(self) -> None:
         """Stop the Classic service and disconnect."""
         logger.info("Stopping Classic service")
         self._running = False
+
+        # Cancel reconnect task
+        if self._reconnect_task:
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
+            self._reconnect_task = None
 
         # Cancel reader task
         if self._reader_task:
@@ -128,13 +119,13 @@ class ClassicService:
                 pass
             self._reader_task = None
 
-        # Close file descriptor
-        if self._fd is not None:
+        # Close socket
+        if self._socket:
             try:
-                os.close(self._fd)
+                self._socket.close()
             except OSError:
                 pass
-            self._fd = None
+            self._socket = None
 
         self._connection.set_disconnected()
         self._update_state(ConnectionState.IDLE)
@@ -146,86 +137,74 @@ class ClassicService:
         Args:
             data: Data to send.
         """
-        if not self.is_connected or self._fd is None:
+        if not self.is_connected or self._socket is None:
             logger.warning("Cannot send: not connected")
             return
 
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, os.write, self._fd, data)
+            await loop.run_in_executor(None, self._socket.send, data)
             self._connection.record_tx(len(data))
             logger.debug("Sent %d bytes via SPP", len(data))
         except OSError as e:
             logger.error("SPP write error: %s", e)
-            self._handle_disconnect(str(e))
-
-    async def _register_profile(self) -> None:
-        """Register SPP profile with BlueZ."""
-        import dbus
-
-        if not self._bus:
-            return
-
-        try:
-            manager = dbus.Interface(
-                self._bus.get_object(BLUEZ_SERVICE, "/org/bluez"),
-                "org.bluez.ProfileManager1",
-            )
-
-            profile_options = {
-                "Name": dbus.String("Serial Port"),
-                "Service": dbus.String(SPP_SERVICE_UUID),
-                "Role": dbus.String("client"),
-                "Channel": dbus.UInt16(0),  # Auto-select via SDP
-                "RequireAuthentication": dbus.Boolean(True),
-                "RequireAuthorization": dbus.Boolean(False),
-            }
-
-            # Create profile handler
-            # In production, this would be a proper D-Bus object
-            manager.RegisterProfile(PROFILE_PATH, SPP_SERVICE_UUID, profile_options)
-
-            logger.info("SPP profile registered")
-
-        except dbus.exceptions.DBusException as e:
-            if "AlreadyExists" not in str(e):
-                raise
-            logger.debug("SPP profile already registered")
+            await self._handle_disconnect(str(e))
 
     async def _connect(self) -> None:
-        """Initiate connection to target device."""
-        import dbus
-
-        if not self._bus:
-            return
-
-        self._update_state(ConnectionState.SCANNING)
+        """Initiate RFCOMM connection to target device."""
+        self._update_state(ConnectionState.CONNECTING)
 
         try:
-            # Get device proxy
-            device_path = f"{ADAPTER_PATH}/dev_{self._target_address.replace(':', '_')}"
-            device = dbus.Interface(
-                self._bus.get_object(BLUEZ_SERVICE, device_path),
-                "org.bluez.Device1",
+            # Create RFCOMM socket
+            loop = asyncio.get_event_loop()
+
+            def create_and_connect() -> socket.socket:
+                sock = socket.socket(
+                    socket.AF_BLUETOOTH,
+                    socket.SOCK_STREAM,
+                    socket.BTPROTO_RFCOMM,
+                )
+                sock.settimeout(10.0)  # 10 second connection timeout
+                sock.connect((self._target_address, self._rfcomm_channel))
+                sock.settimeout(None)  # Remove timeout after connection
+                return sock
+
+            logger.info(
+                "Connecting to %s on RFCOMM channel %d...",
+                self._target_address,
+                self._rfcomm_channel,
             )
 
-            self._update_state(ConnectionState.CONNECTING)
+            self._socket = await loop.run_in_executor(None, create_and_connect)
 
-            # Connect (this will use the registered profile)
-            device.Connect()
+            # Connection successful
+            self._connection.set_connected(self._rfcomm_channel, None)
+            self._update_state(ConnectionState.CONNECTED)
 
-            # Connection handling is done via NewConnection callback
-            logger.info("Connection initiated to %s", self._target_address)
+            logger.info(
+                "SPP connected: %s on channel %d",
+                self._target_address,
+                self._rfcomm_channel,
+            )
 
-        except dbus.exceptions.DBusException as e:
-            error_name = e.get_dbus_name() if hasattr(e, "get_dbus_name") else str(e)
-            logger.error("Connection failed: %s", error_name)
+            # Start reader task
+            self._reader_task = asyncio.create_task(self._read_loop())
+
+        except OSError as e:
+            logger.error("Connection failed: %s", e)
             self._connection.last_error = str(e)
             self._update_state(ConnectionState.ERROR)
 
+            if self._socket:
+                try:
+                    self._socket.close()
+                except OSError:
+                    pass
+                self._socket = None
+
             # Schedule reconnection
             if self._running:
-                await self._schedule_reconnect()
+                self._reconnect_task = asyncio.create_task(self._schedule_reconnect())
 
     async def _schedule_reconnect(self) -> None:
         """Schedule reconnection with exponential backoff."""
@@ -243,79 +222,43 @@ class ClassicService:
         if self._running and not self.is_connected:
             await self._connect()
 
-    def handle_new_connection(self, fd: int, properties: dict[str, object]) -> None:
-        """
-        Handle new SPP connection from BlueZ.
-
-        Called by BlueZ Profile1 when connection is established.
-
-        Args:
-            fd: File descriptor for the connection.
-            properties: Connection properties.
-        """
-        self._fd = fd
-
-        # Extract device info
-        device_name = properties.get("Name")
-
-        # Discover channel from properties or default to 1
-        channel = int(properties.get("Channel", 1))
-
-        self._connection.set_connected(channel, device_name)  # type: ignore[arg-type]
-        self._update_state(ConnectionState.CONNECTED)
-
-        logger.info(
-            "SPP connected: %s (%s) on channel %d",
-            self._target_address,
-            device_name or "unknown",
-            channel,
-        )
-
-        # Start reader task
-        self._reader_task = asyncio.create_task(self._read_loop())
-
-    def handle_request_disconnection(self) -> None:
-        """Handle disconnection request from BlueZ."""
-        self._handle_disconnect("Remote disconnection requested")
-
-    def _handle_disconnect(self, reason: str) -> None:
+    async def _handle_disconnect(self, reason: str) -> None:
         """Handle disconnection event."""
-        old_address = self._target_address
         self._connection.set_disconnected(reason)
         self._update_state(ConnectionState.IDLE)
 
-        if self._fd is not None:
+        if self._socket:
             try:
-                os.close(self._fd)
+                self._socket.close()
             except OSError:
                 pass
-            self._fd = None
+            self._socket = None
 
-        logger.info("SPP disconnected: %s (%s)", old_address, reason)
+        logger.info("SPP disconnected: %s (%s)", self._target_address, reason)
 
         # Schedule reconnection if still running
         if self._running:
-            asyncio.create_task(self._schedule_reconnect())
+            self._reconnect_task = asyncio.create_task(self._schedule_reconnect())
 
     async def _read_loop(self) -> None:
         """Read data from SPP connection."""
-        if self._fd is None:
+        if self._socket is None:
             return
 
         loop = asyncio.get_event_loop()
 
         try:
-            while self._running and self._fd is not None:
+            while self._running and self._socket is not None:
                 try:
-                    # Read with timeout
+                    # Read with timeout using select or polling
                     data = await asyncio.wait_for(
-                        loop.run_in_executor(None, os.read, self._fd, 4096),
+                        loop.run_in_executor(None, self._socket.recv, 4096),
                         timeout=1.0,
                     )
 
                     if not data:
                         # EOF - connection closed
-                        self._handle_disconnect("Connection closed")
+                        await self._handle_disconnect("Connection closed by remote")
                         break
 
                     self._connection.record_rx(len(data))
@@ -327,7 +270,7 @@ class ClassicService:
                 except TimeoutError:
                     continue
                 except OSError as e:
-                    self._handle_disconnect(str(e))
+                    await self._handle_disconnect(str(e))
                     break
 
         except asyncio.CancelledError:

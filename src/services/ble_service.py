@@ -84,40 +84,42 @@ class BLEService:
         Creates the NUS service and characteristics, then starts advertising.
         """
         try:
-            from bless import BlessServer
+            from bless import BlessServer, GATTCharacteristicProperties, GATTAttributePermissions
 
             logger.info("Starting BLE service", extra={"device_name": self._device_name})
 
             # Create server
-            self._server = BlessServer(name=self._device_name)
+            self._server = BlessServer(name=self._device_name, loop=None)
 
             # Set up callbacks
             self._server.read_request_func = self._handle_read_request
             self._server.write_request_func = self._handle_write_request
 
-            # Start server
+            # Define the GATT tree BEFORE starting
+            # This is required for BlueZ backend
+            gatt = {
+                NUS_SERVICE_UUID: {
+                    NUS_TX_CHAR_UUID: {
+                        "Properties": (
+                            GATTCharacteristicProperties.write
+                            | GATTCharacteristicProperties.write_without_response
+                        ),
+                        "Permissions": (GATTAttributePermissions.writeable),
+                        "Value": bytearray(b""),
+                    },
+                    NUS_RX_CHAR_UUID: {
+                        "Properties": (
+                            GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify
+                        ),
+                        "Permissions": (GATTAttributePermissions.readable),
+                        "Value": bytearray(b""),
+                    },
+                }
+            }
+
+            # Start server with GATT tree
+            await self._server.add_gatt(gatt)
             await self._server.start()
-
-            # Add NUS service
-            await self._server.add_new_service(NUS_SERVICE_UUID)
-
-            # Add TX characteristic (iPhone writes to this)
-            await self._server.add_new_characteristic(
-                NUS_SERVICE_UUID,
-                NUS_TX_CHAR_UUID,
-                GATT_PROP_WRITE | GATT_PROP_WRITE_NO_RESP,
-                None,
-                [],
-            )
-
-            # Add RX characteristic (Bridge notifies through this)
-            await self._server.add_new_characteristic(
-                NUS_SERVICE_UUID,
-                NUS_RX_CHAR_UUID,
-                GATT_PROP_READ | GATT_PROP_NOTIFY,
-                None,
-                [],
-            )
 
             # Begin advertising
             self._is_advertising = True
@@ -137,7 +139,10 @@ class BLEService:
         """Stop the BLE server and advertising."""
         if self._server:
             logger.info("Stopping BLE service")
-            await self._server.stop()
+            try:
+                await self._server.stop()
+            except Exception as e:
+                logger.warning("Error stopping BLE server: %s", e)
             self._server = None
 
         self._is_advertising = False
