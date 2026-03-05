@@ -509,9 +509,41 @@ async def main():
     except subprocess.TimeoutExpired:
         log("Warning: btmgmt advertising timed out (may already be advertising)")
 
+    # Build advertisement data with NUS service UUID
+    # Format: Length, Type, Data
+    # Type 0x01 = Flags, Type 0x09 = Complete Local Name, Type 0x07 = Complete 128-bit UUIDs
     name = "PiBTBridge"
-    adv = bytearray([0x02, 0x01, 0x06, len(name) + 1, 0x09]) + name.encode()
+
+    # NUS UUID in little-endian format for BLE advertisement
+    # 6E400001-B5A3-F393-E0A9-E50E24DCCA9E -> reversed bytes
+    nus_uuid_le = bytes(
+        [
+            0x9E,
+            0xCA,
+            0xDC,
+            0x24,
+            0x0E,
+            0xE5,
+            0xA9,
+            0xE0,
+            0x93,
+            0xF3,
+            0xA3,
+            0xB5,
+            0x01,
+            0x00,
+            0x40,
+            0x6E,
+        ]
+    )
+
+    # Build adv data: Flags + Name (must fit in 31 bytes)
+    # Flags: 0x02 = Length, 0x01 = Type (Flags), 0x06 = LE General Discoverable + BR/EDR Not Supported
+    adv = bytearray([0x02, 0x01, 0x06])
+    # Complete Local Name: length, 0x09, name bytes
+    adv += bytearray([len(name) + 1, 0x09]) + name.encode()
     adv = adv.ljust(31, b"\x00")
+
     try:
         subprocess.run(
             ["sudo", "hcitool", "cmd", "0x08", "0x0008", f"0x{len(name) + 5:02x}"]
@@ -521,6 +553,22 @@ async def main():
         )
     except subprocess.TimeoutExpired:
         log("Warning: hcitool advertising data timed out")
+
+    # Set scan response data with NUS service UUID (this is where we can put more data)
+    # Scan response can also be 31 bytes
+    scan_rsp = bytearray([17, 0x07]) + nus_uuid_le  # Length=17, Type=0x07 (Complete 128-bit UUIDs)
+    scan_rsp = scan_rsp.ljust(31, b"\x00")
+
+    try:
+        subprocess.run(
+            ["sudo", "hcitool", "cmd", "0x08", "0x0009", f"0x{18:02x}"]
+            + [f"0x{b:02x}" for b in scan_rsp],
+            capture_output=True,
+            timeout=5,
+        )
+        log("Set scan response with NUS UUID")
+    except subprocess.TimeoutExpired:
+        log("Warning: hcitool scan response data timed out")
 
     log("")
     log("=" * 60)
