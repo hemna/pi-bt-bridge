@@ -15,8 +15,20 @@ from src.models.state import ConnectionState
 # SPP Service UUID
 SPP_SERVICE_UUID: Final[str] = "00001101-0000-1000-8000-00805F9B34FB"
 
-# Default RFCOMM channel for SPP
-DEFAULT_RFCOMM_CHANNEL: Final[int] = 1
+# Default RFCOMM channel for SPP (TH-D74 uses channel 2 for Serial Port service)
+DEFAULT_RFCOMM_CHANNEL: Final[int] = 2
+
+# KISS Protocol Constants
+KISS_FEND: Final[int] = 0xC0  # Frame End
+KISS_CMD_TXDELAY: Final[int] = 0x01  # TX delay command (in 10ms units)
+KISS_CMD_SLOT_TIME: Final[int] = 0x03  # Slot time command (in 10ms units)
+KISS_CMD_TX_TAIL: Final[int] = 0x04  # TX tail command (in 10ms units)
+
+# Default KISS parameters (matching Android app values)
+DEFAULT_TXDELAY_MS: Final[int] = 500  # 500ms = 50 units
+DEFAULT_SLOT_TIME_MS: Final[int] = 100  # 100ms = 10 units
+DEFAULT_TX_TAIL_MS: Final[int] = 50  # 50ms = 5 units
+KISS_COMMAND_DELAY_S: Final[float] = 0.05  # 50ms delay between commands
 
 logger = logging.getLogger("bt-bridge.classic")
 
@@ -187,6 +199,12 @@ class ClassicService:
                 self._rfcomm_channel,
             )
 
+            # NOTE: Do NOT send KISS parameter commands to TH-D74!
+            # Testing showed that sending TXDELAY/SLOT_TIME/TX_TAIL commands
+            # prevents the TH-D74 from transmitting packets. The radio works
+            # correctly without these configuration commands.
+            # await self._configure_kiss_parameters()
+
             # Start reader task
             self._reader_task = asyncio.create_task(self._read_loop())
 
@@ -205,6 +223,64 @@ class ClassicService:
             # Schedule reconnection
             if self._running:
                 self._reconnect_task = asyncio.create_task(self._schedule_reconnect())
+
+    async def _configure_kiss_parameters(self) -> None:
+        """
+        Configure TNC with KISS parameters after connection.
+
+        Sends TX delay, slot time, and TX tail settings. This may be required
+        for some TNCs (like TH-D74) to properly recognize the Bluetooth connection.
+        Based on Android app's configureKissParameters() function.
+        """
+        if self._socket is None:
+            return
+
+        loop = asyncio.get_event_loop()
+
+        try:
+            logger.info("Configuring KISS parameters...")
+
+            # Set TX delay (time to wait after keying before sending data)
+            # 500ms = 50 units (in 10ms units)
+            txdelay_units = DEFAULT_TXDELAY_MS // 10
+            txdelay_cmd = bytes([KISS_FEND, KISS_CMD_TXDELAY, txdelay_units, KISS_FEND])
+            logger.debug(
+                "Setting TXDELAY to %dms (%d units)",
+                DEFAULT_TXDELAY_MS,
+                txdelay_units,
+            )
+            await loop.run_in_executor(None, self._socket.send, txdelay_cmd)
+            await asyncio.sleep(KISS_COMMAND_DELAY_S)
+
+            # Set slot time (interval between channel checks)
+            # 100ms = 10 units (in 10ms units)
+            slot_time_units = DEFAULT_SLOT_TIME_MS // 10
+            slot_time_cmd = bytes([KISS_FEND, KISS_CMD_SLOT_TIME, slot_time_units, KISS_FEND])
+            logger.debug(
+                "Setting SLOT_TIME to %dms (%d units)",
+                DEFAULT_SLOT_TIME_MS,
+                slot_time_units,
+            )
+            await loop.run_in_executor(None, self._socket.send, slot_time_cmd)
+            await asyncio.sleep(KISS_COMMAND_DELAY_S)
+
+            # Set TX tail (time to keep transmitter keyed after data)
+            # 50ms = 5 units (in 10ms units)
+            tx_tail_units = DEFAULT_TX_TAIL_MS // 10
+            tx_tail_cmd = bytes([KISS_FEND, KISS_CMD_TX_TAIL, tx_tail_units, KISS_FEND])
+            logger.debug(
+                "Setting TX_TAIL to %dms (%d units)",
+                DEFAULT_TX_TAIL_MS,
+                tx_tail_units,
+            )
+            await loop.run_in_executor(None, self._socket.send, tx_tail_cmd)
+            await asyncio.sleep(KISS_COMMAND_DELAY_S)
+
+            logger.info("KISS parameters configured successfully")
+
+        except OSError as e:
+            logger.warning("Failed to configure KISS parameters: %s", e)
+            # Don't fail the connection, some TNCs may not support all commands
 
     async def _schedule_reconnect(self) -> None:
         """Schedule reconnection with exponential backoff."""

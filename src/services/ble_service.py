@@ -88,7 +88,7 @@ class BLEService:
                 capture_output=True,
                 timeout=5,
             )
-            # Make adapter discoverable
+            # Make adapter discoverable (for BR/EDR discovery in iOS Settings)
             subprocess.run(
                 ["bluetoothctl", "discoverable", "on"],
                 capture_output=True,
@@ -103,6 +103,93 @@ class BLEService:
             logger.info("Bluetooth adapter set discoverable as '%s'", self._device_name)
         except Exception as e:
             logger.warning("Could not set adapter discoverable: %s", e)
+
+    def _enable_ble_advertising(self) -> None:
+        """
+        Enable BLE advertising via btmgmt.
+
+        The bless library registers advertisements with BlueZ's LEAdvertisingManager,
+        but on some configurations this doesn't automatically enable the adapter's
+        advertising flag. We need to explicitly enable it.
+        """
+        try:
+            # Enable BLE advertising at the adapter level
+            result = subprocess.run(
+                ["sudo", "btmgmt", "advertising", "on"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                logger.info("BLE advertising enabled via btmgmt")
+            else:
+                logger.warning("btmgmt advertising on failed: %s", result.stderr)
+        except FileNotFoundError:
+            logger.warning("btmgmt not found, trying hciconfig")
+            try:
+                # Fallback: use hciconfig leadv
+                subprocess.run(
+                    ["sudo", "hciconfig", "hci0", "leadv", "0"],
+                    capture_output=True,
+                    timeout=5,
+                )
+                logger.info("BLE advertising enabled via hciconfig leadv")
+            except Exception as e:
+                logger.warning("Could not enable BLE advertising: %s", e)
+        except Exception as e:
+            logger.warning("Could not enable BLE advertising: %s", e)
+
+    def _set_advertising_data_with_name(self) -> None:
+        """
+        Set BLE advertising data to include the local name.
+
+        The bless library's BlueZ backend doesn't include the local name in the
+        actual advertisement packet by default. We use direct HCI commands to
+        set the advertising data with flags and complete local name, which iOS
+        CoreBluetooth needs to discover the device during scanning.
+        """
+        try:
+            name_bytes = self._device_name.encode("utf-8")[:20]  # Max 20 bytes for name
+
+            # Build advertising data
+            adv_data = bytearray()
+            # Flags: LE General Discoverable (0x02) + BR/EDR Not Supported (0x04) = 0x06
+            adv_data += bytes([0x02, 0x01, 0x06])
+            # Complete Local Name (AD Type 0x09)
+            adv_data += bytes([len(name_bytes) + 1, 0x09]) + name_bytes
+
+            total_len = len(adv_data)
+            adv_data = adv_data.ljust(31, b"\x00")
+
+            # HCI LE Set Advertising Data (OGF=0x08, OCF=0x0008)
+            cmd_params = bytes([total_len]) + bytes(adv_data)
+            result = subprocess.run(
+                ["sudo", "hcitool", "cmd", "0x08", "0x0008"] + [f"0x{b:02x}" for b in cmd_params],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            if result.returncode == 0 and "00" in result.stdout:
+                logger.info("BLE advertising data set with name '%s'", self._device_name)
+            else:
+                logger.warning("Failed to set advertising data: %s", result.stderr or result.stdout)
+
+            # Set scan response with service UUID
+            uuid_bytes = bytes.fromhex(NUS_SERVICE_UUID.replace("-", ""))[::-1]  # Little-endian
+            scan_rsp = bytes([len(uuid_bytes) + 1, 0x07]) + uuid_bytes  # 128-bit Service UUIDs
+            scan_rsp = scan_rsp.ljust(31, b"\x00")
+
+            cmd_params2 = bytes([len(uuid_bytes) + 2]) + bytes(scan_rsp)
+            subprocess.run(
+                ["sudo", "hcitool", "cmd", "0x08", "0x0009"] + [f"0x{b:02x}" for b in cmd_params2],
+                capture_output=True,
+                timeout=5,
+            )
+            logger.debug("BLE scan response set with NUS service UUID")
+
+        except Exception as e:
+            logger.warning("Could not set advertising data: %s", e)
 
     def _restore_adapter_settings(self) -> None:
         """Restore adapter settings on shutdown."""
@@ -120,6 +207,9 @@ class BLEService:
         Start the BLE GATT server and begin advertising.
 
         Creates the NUS service and characteristics, then starts advertising.
+        The bless library should include the local name in the BLE advertisement
+        via the LocalName D-Bus property on the LEAdvertisement1 interface.
+
         Also makes the Bluetooth adapter discoverable so iOS can see it in Settings.
         """
         try:
@@ -127,10 +217,7 @@ class BLEService:
 
             logger.info("Starting BLE service", extra={"device_name": self._device_name})
 
-            # Make adapter discoverable for iOS Settings -> Bluetooth
-            self._setup_adapter_discoverable()
-
-            # Create server
+            # Create server with explicit name - bless will set LocalName in advertisement
             self._server = BlessServer(name=self._device_name, loop=None)
 
             # Set up callbacks
@@ -159,9 +246,27 @@ class BLEService:
                 }
             }
 
+            logger.info(
+                "Starting BLE GATT server with NUS service: %s",
+                NUS_SERVICE_UUID,
+            )
+
             # Start server with GATT tree
             await self._server.add_gatt(gatt)
             await self._server.start()
+
+            # Configure adapter AFTER bless starts (bless may reset some settings)
+            # This ensures discoverable/pairable flags are properly set for iOS
+            self._setup_adapter_discoverable()
+
+            # Explicitly enable BLE advertising at the adapter level
+            # This is needed because bless's LEAdvertisingManager registration
+            # doesn't always enable the adapter's advertising flag
+            self._enable_ble_advertising()
+
+            # Set advertising data with local name via HCI commands
+            # This ensures iOS CoreBluetooth can see the device name during scanning
+            self._set_advertising_data_with_name()
 
             # Begin advertising
             self._is_advertising = True

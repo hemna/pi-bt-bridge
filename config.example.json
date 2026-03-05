@@ -1,6 +1,7 @@
 {
   "target_address": "00:11:22:33:44:55",
   "target_pin": "0000",
+  "rfcomm_channel": 2,
   "device_name": "PiBTBridge",
   "log_level": "INFO",
   "log_file": "/var/log/bt-bridge.log",

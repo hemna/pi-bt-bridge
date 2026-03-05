@@ -32,6 +32,7 @@ class Configuration:
     Attributes:
         target_address: BT Classic target MAC address (required).
         target_pin: Pairing PIN if needed.
+        rfcomm_channel: RFCOMM channel for SPP connection (use sdptool to find).
         device_name: Advertised BLE device name.
         log_level: Logging verbosity (DEBUG, INFO, WARNING, ERROR).
         log_file: Log file path, None for stdout.
@@ -42,6 +43,7 @@ class Configuration:
 
     target_address: str
     target_pin: str = "0000"
+    rfcomm_channel: int = 2  # TH-D74 uses channel 2 for SPP/Serial Port
     device_name: str = "PiBTBridge"
     log_level: str = "INFO"
     log_file: str | None = None
@@ -85,6 +87,10 @@ class Configuration:
         if not 5 <= self.reconnect_max_delay <= 300:
             errors.append(f"reconnect_max_delay must be 5-300, got: {self.reconnect_max_delay}")
 
+        # Validate rfcomm_channel (1-30)
+        if not 1 <= self.rfcomm_channel <= 30:
+            errors.append(f"rfcomm_channel must be 1-30, got: {self.rfcomm_channel}")
+
         if errors:
             raise ConfigurationError("; ".join(errors))
 
@@ -110,6 +116,7 @@ class Configuration:
             return cls(
                 target_address=str(data.get("target_address", "")),
                 target_pin=str(data.get("target_pin", "0000")),
+                rfcomm_channel=int(data.get("rfcomm_channel", 2)),  # type: ignore[arg-type]
                 device_name=str(data.get("device_name", "PiBTBridge")),
                 log_level=str(data.get("log_level", "INFO")),
                 log_file=data.get("log_file"),  # type: ignore[arg-type]

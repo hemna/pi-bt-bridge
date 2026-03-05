@@ -34,7 +34,7 @@ async def run_daemon(config: Configuration) -> None:
         config: Daemon configuration.
     """
     logger.info("Starting BT bridge daemon")
-    logger.info("Target TNC: %s", config.target_address)
+    logger.info("Target TNC: %s (RFCOMM channel %d)", config.target_address, config.rfcomm_channel)
     logger.info("Device name: %s", config.device_name)
 
     # Start pairing agent for auto-accepting Bluetooth connections
@@ -54,6 +54,7 @@ async def run_daemon(config: Configuration) -> None:
         target_address=config.target_address,
         target_pin=config.target_pin,
         reconnect_max_delay=config.reconnect_max_delay,
+        rfcomm_channel=config.rfcomm_channel,
         connection=classic_conn,
     )
 
