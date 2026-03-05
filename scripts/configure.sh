@@ -63,10 +63,11 @@ check_bluetooth() {
 
 # Scan for Bluetooth devices
 scan_devices() {
-    echo_step "Scanning for Bluetooth devices..."
-    echo "  Please make sure your TNC is powered on and in pairing mode."
-    echo "  Scanning for 10 seconds..."
-    echo ""
+    # All user-facing output goes to stderr so we can capture just the filename
+    echo_step "Scanning for Bluetooth devices..." >&2
+    echo "  Please make sure your TNC is powered on and in pairing mode." >&2
+    echo "  Scanning for 10 seconds..." >&2
+    echo "" >&2
 
     # Start scan and capture devices
     local devices_file=$(mktemp)
@@ -77,10 +78,10 @@ scan_devices() {
     
     # Show countdown
     for i in {10..1}; do
-        echo -ne "\r  Scanning... $i seconds remaining "
+        echo -ne "\r  Scanning... $i seconds remaining " >&2
         sleep 1
     done
-    echo -e "\r  Scanning complete!              "
+    echo -e "\r  Scanning complete!              " >&2
     
     # Wait for scan to finish
     wait $scan_pid 2>/dev/null || true
@@ -88,6 +89,7 @@ scan_devices() {
     # Get list of devices
     bluetoothctl devices > "$devices_file"
     
+    # Only output the filename to stdout
     echo "$devices_file"
 }
 
