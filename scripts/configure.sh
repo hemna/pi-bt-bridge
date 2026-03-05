@@ -97,53 +97,54 @@ scan_devices() {
 select_device() {
     local devices_file="$1"
     
-    echo ""
-    echo_bold "Found Bluetooth devices:"
-    echo "----------------------------------------"
-    
-    # Parse and display devices with numbers
-    local i=1
-    declare -a addresses
-    declare -a names
-    
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^Device\ ([0-9A-Fa-f:]+)\ (.*)$ ]]; then
-            local addr="${BASH_REMATCH[1]}"
-            local name="${BASH_REMATCH[2]}"
-            printf "  %2d) %s  %s\n" "$i" "$addr" "$name"
-            addresses+=("$addr")
-            names+=("$name")
-            ((i++))
-        fi
-    done < "$devices_file"
-    
-    echo "----------------------------------------"
-    
-    if [ ${#addresses[@]} -eq 0 ]; then
-        echo_warn "No devices found. Make sure your TNC is:"
-        echo "  1. Powered on"
-        echo "  2. In pairing/discovery mode"
-        echo "  3. Within range"
-        echo ""
-        echo "You can enter the MAC address manually."
-        echo ""
-        read -p "Enter TNC MAC address (XX:XX:XX:XX:XX:XX): " TARGET_ADDRESS
-        TARGET_NAME="Unknown"
-        return
-    fi
-    
-    echo ""
-    echo "  0) Enter address manually"
-    echo ""
-    
     while true; do
-        read -p "Select your TNC device [1-${#addresses[@]}]: " selection
+        echo ""
+        echo_bold "Found Bluetooth devices:"
+        echo "----------------------------------------"
         
-        if [ "$selection" = "0" ]; then
+        # Parse and display devices with numbers
+        local i=1
+        declare -a addresses=()
+        declare -a names=()
+        
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^Device\ ([0-9A-Fa-f:]+)\ (.*)$ ]]; then
+                local addr="${BASH_REMATCH[1]}"
+                local name="${BASH_REMATCH[2]}"
+                printf "  %2d) %s  %s\n" "$i" "$addr" "$name"
+                addresses+=("$addr")
+                names+=("$name")
+                ((i++))
+            fi
+        done < "$devices_file"
+        
+        echo "----------------------------------------"
+        
+        if [ ${#addresses[@]} -eq 0 ]; then
+            echo_warn "No devices found. Make sure your TNC is:"
+            echo "  1. Powered on"
+            echo "  2. In pairing/discovery mode"
+            echo "  3. Within range"
+        fi
+        
+        echo ""
+        echo "  r) Rescan for devices"
+        echo "  0) Enter address manually"
+        echo ""
+        
+        read -p "Select your TNC device [1-${#addresses[@]}, r=rescan, 0=manual]: " selection
+        
+        if [ "$selection" = "r" ] || [ "$selection" = "R" ]; then
+            echo ""
+            # Rescan
+            rm -f "$devices_file"
+            devices_file=$(scan_devices)
+            continue
+        elif [ "$selection" = "0" ]; then
             read -p "Enter TNC MAC address (XX:XX:XX:XX:XX:XX): " TARGET_ADDRESS
             TARGET_NAME="Unknown"
             break
-        elif [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le ${#addresses[@]} ]; then
+        elif [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ ${#addresses[@]} -gt 0 ] && [ "$selection" -le ${#addresses[@]} ]; then
             TARGET_ADDRESS="${addresses[$((selection-1))]}"
             TARGET_NAME="${names[$((selection-1))]}"
             break
