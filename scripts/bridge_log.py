@@ -355,16 +355,28 @@ async def handle_index(request):
                 const resp = await fetch('/api/action/' + name, {{ method: 'POST' }});
                 const data = await resp.json();
                 toast.textContent = data.message || (data.success ? 'Success' : 'Failed');
+                
+                // Longer delay for restart since service needs time to come back
+                const delay = (name === 'restart') ? 8000 : 1500;
+                if (name === 'restart') {{
+                    toast.textContent = 'Restarting... page will reload in 8s';
+                }}
                 setTimeout(() => {{
                     toast.classList.remove('show');
                     location.reload();
-                }}, 1500);
+                }}, delay);
             }} catch (e) {{
-                toast.textContent = 'Error: ' + e.message;
-                setTimeout(() => {{
-                    toast.classList.remove('show');
-                    autoRefresh = true;
-                }}, 3000);
+                // For restart, connection error is expected - wait and reload
+                if (name === 'restart') {{
+                    toast.textContent = 'Restarting... page will reload in 8s';
+                    setTimeout(() => location.reload(), 8000);
+                }} else {{
+                    toast.textContent = 'Error: ' + e.message;
+                    setTimeout(() => {{
+                        toast.classList.remove('show');
+                        autoRefresh = true;
+                    }}, 3000);
+                }}
             }}
         }}
         
