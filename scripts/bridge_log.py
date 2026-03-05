@@ -498,120 +498,32 @@ async def main():
     await server.add_gatt(gatt)
     await server.start()
 
-    # Set up BLE advertising using raw HCI commands
-    # BlueZ/bless advertising doesn't work properly - must use direct HCI
-    log("Configuring BLE advertising via raw HCI commands...")
+    # Wait a moment for bless/BlueZ to settle
+    await asyncio.sleep(1)
 
-    # Set advertising parameters (ADV_IND - connectable undirected, all channels)
-    # OGF 0x08, OCF 0x0006 - LE Set Advertising Parameters
-    subprocess.run(
-        [
-            "sudo",
-            "hcitool",
-            "-i",
-            "hci0",
-            "cmd",
-            "0x08",
-            "0x0006",
-            "20",
-            "00",  # Min interval: 0x0020 (20ms)
-            "40",
-            "00",  # Max interval: 0x0040 (40ms)
-            "00",  # Type: ADV_IND (connectable undirected)
-            "00",  # Own address type: public
-            "00",  # Peer address type
-            "00",
-            "00",
-            "00",
-            "00",
-            "00",
-            "00",  # Peer address
-            "07",  # Channel map: all channels
-            "00",
-        ],  # Filter policy: all
-        capture_output=True,
-        timeout=5,
-    )
+    # Set up BLE advertising using bluetoothctl
+    # This registers a proper advertisement with BlueZ that iOS can see
+    log("Configuring BLE advertising...")
 
-    # Set advertising data: Flags + Complete Local Name "PiBTBridge"
-    # Flags: 02 01 06 (length=2, type=flags, value=LE General Discoverable)
-    # Name: 0B 09 PiBTBridge (length=11, type=complete local name)
-    subprocess.run(
-        [
-            "sudo",
-            "hcitool",
-            "-i",
-            "hci0",
-            "cmd",
-            "0x08",
-            "0x0008",
-            "0E",  # Total length
-            "02",
-            "01",
-            "06",  # Flags
-            "0B",
-            "09",
-            "50",
-            "69",
-            "42",
-            "54",
-            "42",
-            "72",
-            "69",
-            "64",
-            "67",
-            "65",
-        ],  # "PiBTBridge"
-        capture_output=True,
-        timeout=5,
+    # Use bluetoothctl to set up advertising with NUS UUID
+    # Run in a subprocess that stays alive to keep the advertisement active
+    adv_script = """
+menu advertise
+name PiBTBridge  
+uuids 6e400001-b5a3-f393-e0a9-e50e24dcca9e
+discoverable on
+back
+advertise peripheral
+"""
+    # Start bluetoothctl with advertisement config
+    adv_proc = subprocess.Popen(
+        ["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
-
-    # Set scan response data with NUS UUID (128-bit)
-    # Type 0x07 = Complete List of 128-bit Service UUIDs
-    # NUS UUID little-endian: 9E CA DC 24 0E E5 A9 E0 93 F3 A3 B5 01 00 40 6E
-    subprocess.run(
-        [
-            "sudo",
-            "hcitool",
-            "-i",
-            "hci0",
-            "cmd",
-            "0x08",
-            "0x0009",
-            "12",  # Total length (18 bytes)
-            "11",
-            "07",  # Length=17, Type=Complete 128-bit UUIDs
-            "9E",
-            "CA",
-            "DC",
-            "24",
-            "0E",
-            "E5",
-            "A9",
-            "E0",
-            "93",
-            "F3",
-            "A3",
-            "B5",
-            "01",
-            "00",
-            "40",
-            "6E",
-        ],
-        capture_output=True,
-        timeout=5,
-    )
-
-    # Enable LE advertising
-    result = subprocess.run(
-        ["sudo", "hcitool", "-i", "hci0", "cmd", "0x08", "0x000A", "01"],
-        capture_output=True,
-        timeout=5,
-    )
-    if b"20 00" in result.stdout:
-        log("BLE advertising enabled successfully")
-    else:
-        log(f"BLE advertising may have issues: {result.stdout}")
+    adv_proc.stdin.write(adv_script.encode())
+    adv_proc.stdin.flush()
+    # Don't close stdin - keep process alive to maintain advertisement
+    await asyncio.sleep(2)
+    log("BLE advertising configured via bluetoothctl")
 
     log("")
     log("=" * 60)
