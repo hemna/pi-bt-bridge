@@ -201,35 +201,57 @@ pair_device() {
     echo_step "Checking pairing status..."
     
     local paired=$(bluetoothctl info "$TARGET_ADDRESS" 2>/dev/null | grep "Paired: yes" || true)
+    local bonded=$(bluetoothctl info "$TARGET_ADDRESS" 2>/dev/null | grep "Bonded: yes" || true)
     
-    if [ -n "$paired" ]; then
+    if [ -n "$paired" ] || [ -n "$bonded" ]; then
         echo_info "Device is already paired."
+        # Ensure it's trusted
+        bluetoothctl trust "$TARGET_ADDRESS" &>/dev/null
     else
         echo_warn "Device is not paired."
         read -p "Would you like to pair now? [Y/n]: " do_pair
         do_pair="${do_pair:-Y}"
         
         if [[ "$do_pair" =~ ^[Yy] ]]; then
+            echo ""
             echo "Pairing with $TARGET_ADDRESS..."
-            echo "  If prompted, confirm the PIN on your TNC."
+            echo ""
+            echo_bold "IMPORTANT: Check your TNC device!"
+            echo "  - You may need to confirm a PIN on your TNC"
+            echo "  - Or initiate pairing FROM the TNC to 'pi-sugar'"
             echo ""
             
-            # Trust and pair
-            bluetoothctl << EOF
-agent on
-default-agent
-pair $TARGET_ADDRESS
-trust $TARGET_ADDRESS
-EOF
+            # Make Pi discoverable so TNC can find it
+            bluetoothctl discoverable on &>/dev/null
+            
+            # Try to pair
+            bluetoothctl pair "$TARGET_ADDRESS"
+            
+            # Wait for pairing to complete
+            sleep 3
+            
+            # Trust the device
+            bluetoothctl trust "$TARGET_ADDRESS" &>/dev/null
+            
+            # Turn off discoverable
+            bluetoothctl discoverable off &>/dev/null
             
             # Verify pairing
-            sleep 2
             paired=$(bluetoothctl info "$TARGET_ADDRESS" 2>/dev/null | grep "Paired: yes" || true)
-            if [ -n "$paired" ]; then
+            bonded=$(bluetoothctl info "$TARGET_ADDRESS" 2>/dev/null | grep "Bonded: yes" || true)
+            
+            if [ -n "$paired" ] || [ -n "$bonded" ]; then
                 echo_info "Pairing successful!"
             else
-                echo_warn "Pairing may have failed. You can retry manually with:"
-                echo "  bluetoothctl pair $TARGET_ADDRESS"
+                echo ""
+                echo_warn "Pairing may not have completed."
+                echo ""
+                echo "Try pairing manually:"
+                echo "  1. On your TNC, go to Bluetooth settings"
+                echo "  2. Look for 'pi-sugar' and pair with it"
+                echo "  3. Or run: bluetoothctl pair $TARGET_ADDRESS"
+                echo ""
+                read -p "Press Enter to continue anyway..." _
             fi
         fi
     fi
