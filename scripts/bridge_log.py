@@ -19,6 +19,18 @@ except ImportError:
     HAS_WEB = False
     print("Warning: aiohttp not installed, web interface disabled")
 
+# Try to import dbus for pairing agent
+try:
+    import dbus
+    import dbus.service
+    import dbus.mainloop.glib
+    from gi.repository import GLib
+
+    HAS_DBUS = True
+except ImportError:
+    HAS_DBUS = False
+    print("Warning: dbus not installed, pairing agent disabled")
+
 NUS_SERVICE = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 NUS_TX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 NUS_RX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -49,6 +61,7 @@ rfcomm_rx = None  # PyBluez socket for RX (required for receiving)
 server = None
 log_file = None
 reader_task = None  # TNC reader task
+agent = None  # D-Bus pairing agent
 
 # Statistics
 stats = {
@@ -60,6 +73,58 @@ stats = {
     "ble_connected": False,
     "classic_connected": False,
 }
+
+
+# D-Bus Pairing Agent - auto-accepts all pairing requests
+AGENT_INTERFACE = "org.bluez.Agent1"
+AGENT_PATH = "/com/pibtbridge/agent"
+
+if HAS_DBUS:
+
+    class PairingAgent(dbus.service.Object):
+        """BlueZ pairing agent that auto-accepts all requests."""
+
+        @dbus.service.method(AGENT_INTERFACE, in_signature="", out_signature="")
+        def Release(self):
+            print("[Agent] Released", flush=True)
+
+        @dbus.service.method(AGENT_INTERFACE, in_signature="os", out_signature="")
+        def AuthorizeService(self, device, uuid):
+            print(f"[Agent] AuthorizeService {device} {uuid}", flush=True)
+
+        @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="s")
+        def RequestPinCode(self, device):
+            print(f"[Agent] RequestPinCode {device}", flush=True)
+            return "0000"
+
+        @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="u")
+        def RequestPasskey(self, device):
+            print(f"[Agent] RequestPasskey {device}", flush=True)
+            return dbus.UInt32(0)
+
+        @dbus.service.method(AGENT_INTERFACE, in_signature="ouq", out_signature="")
+        def DisplayPasskey(self, device, passkey, entered):
+            print(f"[Agent] DisplayPasskey {device}: {passkey:06d}", flush=True)
+
+        @dbus.service.method(AGENT_INTERFACE, in_signature="os", out_signature="")
+        def DisplayPinCode(self, device, pincode):
+            print(f"[Agent] DisplayPinCode {device}: {pincode}", flush=True)
+
+        @dbus.service.method(AGENT_INTERFACE, in_signature="ou", out_signature="")
+        def RequestConfirmation(self, device, passkey):
+            print(
+                f"[Agent] RequestConfirmation {device}: {passkey:06d} - AUTO ACCEPTING", flush=True
+            )
+            # Auto-accept by not raising an exception
+
+        @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="")
+        def RequestAuthorization(self, device):
+            print(f"[Agent] RequestAuthorization {device} - AUTO ACCEPTING", flush=True)
+            # Auto-accept
+
+        @dbus.service.method(AGENT_INTERFACE, in_signature="", out_signature="")
+        def Cancel(self):
+            print("[Agent] Cancel", flush=True)
 
 
 def log(msg):
@@ -459,7 +524,7 @@ async def start_web_server():
 
 
 async def main():
-    global rfcomm_tx, rfcomm_rx, server, log_file, reader_task
+    global rfcomm_tx, rfcomm_rx, server, log_file, reader_task, agent
 
     stats["started_at"] = datetime.now()
     log_file = open("/tmp/bridge_packets.log", "w")
@@ -467,18 +532,37 @@ async def main():
     subprocess.run(["sudo", "hciconfig", "hci0", "name", "PiBTBridge"], capture_output=True)
     subprocess.run(["bluetoothctl", "system-alias", "PiBTBridge"], capture_output=True)
 
-    # Start a bluetoothctl agent to handle pairing requests
-    # This must stay running to auto-accept BLE pairing
-    log("Starting Bluetooth pairing agent...")
-    agent_proc = subprocess.Popen(
-        ["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-    # Register as NoInputNoOutput agent (auto-accepts pairing)
-    agent_proc.stdin.write(b"agent NoInputNoOutput\n")
-    agent_proc.stdin.write(b"default-agent\n")
-    agent_proc.stdin.flush()
-    await asyncio.sleep(1)
-    log("Bluetooth agent registered")
+    # Start D-Bus pairing agent to auto-accept BLE pairing
+    if HAS_DBUS:
+        log("Starting D-Bus pairing agent...")
+        try:
+            dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+            bus = dbus.SystemBus()
+
+            # Create and register the agent
+            agent = PairingAgent(bus, AGENT_PATH)
+
+            # Get the AgentManager and register our agent
+            agent_manager = dbus.Interface(
+                bus.get_object("org.bluez", "/org/bluez"), "org.bluez.AgentManager1"
+            )
+            agent_manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
+            agent_manager.RequestDefaultAgent(AGENT_PATH)
+            log("D-Bus pairing agent registered successfully")
+
+            # Start GLib main loop in a thread for D-Bus events
+            import threading
+
+            def run_glib():
+                loop = GLib.MainLoop()
+                loop.run()
+
+            glib_thread = threading.Thread(target=run_glib, daemon=True)
+            glib_thread.start()
+        except Exception as e:
+            log(f"Failed to register D-Bus agent: {e}")
+    else:
+        log("D-Bus not available, pairing may fail")
 
     # Start web server
     web_runner = await start_web_server()
