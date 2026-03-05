@@ -216,17 +216,29 @@ async def main():
     await server.add_gatt(gatt)
     await server.start()
 
-    subprocess.run(["bluetoothctl", "discoverable", "on"], capture_output=True)
-    subprocess.run(["sudo", "btmgmt", "advertising", "on"], capture_output=True)
+    # Set discoverable and enable advertising - these might fail/timeout, which is OK
+    try:
+        subprocess.run(["bluetoothctl", "discoverable", "on"], capture_output=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        log("Warning: bluetoothctl discoverable timed out")
+
+    try:
+        subprocess.run(["sudo", "btmgmt", "advertising", "on"], capture_output=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        log("Warning: btmgmt advertising timed out (may already be advertising)")
 
     name = "PiBTBridge"
     adv = bytearray([0x02, 0x01, 0x06, len(name) + 1, 0x09]) + name.encode()
     adv = adv.ljust(31, b"\x00")
-    subprocess.run(
-        ["sudo", "hcitool", "cmd", "0x08", "0x0008", f"0x{len(name) + 5:02x}"]
-        + [f"0x{b:02x}" for b in adv],
-        capture_output=True,
-    )
+    try:
+        subprocess.run(
+            ["sudo", "hcitool", "cmd", "0x08", "0x0008", f"0x{len(name) + 5:02x}"]
+            + [f"0x{b:02x}" for b in adv],
+            capture_output=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        log("Warning: hcitool advertising data timed out")
 
     log("")
     log("=" * 60)
@@ -239,8 +251,12 @@ async def main():
     # Start TNC reader task
     reader_task = asyncio.create_task(tnc_reader())
 
-    # Run for 5 minutes
-    await asyncio.sleep(300)
+    # Run indefinitely (for systemd service)
+    try:
+        while True:
+            await asyncio.sleep(3600)  # Sleep 1 hour at a time
+    except asyncio.CancelledError:
+        pass
 
     reader_task.cancel()
     rfcomm_rx.close()
