@@ -498,77 +498,120 @@ async def main():
     await server.add_gatt(gatt)
     await server.start()
 
-    # Set discoverable and enable advertising - these might fail/timeout, which is OK
-    try:
-        subprocess.run(["bluetoothctl", "discoverable", "on"], capture_output=True, timeout=5)
-    except subprocess.TimeoutExpired:
-        log("Warning: bluetoothctl discoverable timed out")
+    # Set up BLE advertising using raw HCI commands
+    # BlueZ/bless advertising doesn't work properly - must use direct HCI
+    log("Configuring BLE advertising via raw HCI commands...")
 
-    try:
-        subprocess.run(["sudo", "btmgmt", "advertising", "on"], capture_output=True, timeout=5)
-    except subprocess.TimeoutExpired:
-        log("Warning: btmgmt advertising timed out (may already be advertising)")
-
-    # Build advertisement data with NUS service UUID
-    # Format: Length, Type, Data
-    # Type 0x01 = Flags, Type 0x09 = Complete Local Name, Type 0x07 = Complete 128-bit UUIDs
-    name = "PiBTBridge"
-
-    # NUS UUID in little-endian format for BLE advertisement
-    # 6E400001-B5A3-F393-E0A9-E50E24DCCA9E -> reversed bytes
-    nus_uuid_le = bytes(
+    # Set advertising parameters (ADV_IND - connectable undirected, all channels)
+    # OGF 0x08, OCF 0x0006 - LE Set Advertising Parameters
+    subprocess.run(
         [
-            0x9E,
-            0xCA,
-            0xDC,
-            0x24,
-            0x0E,
-            0xE5,
-            0xA9,
-            0xE0,
-            0x93,
-            0xF3,
-            0xA3,
-            0xB5,
-            0x01,
-            0x00,
-            0x40,
-            0x6E,
-        ]
+            "sudo",
+            "hcitool",
+            "-i",
+            "hci0",
+            "cmd",
+            "0x08",
+            "0x0006",
+            "20",
+            "00",  # Min interval: 0x0020 (20ms)
+            "40",
+            "00",  # Max interval: 0x0040 (40ms)
+            "00",  # Type: ADV_IND (connectable undirected)
+            "00",  # Own address type: public
+            "00",  # Peer address type
+            "00",
+            "00",
+            "00",
+            "00",
+            "00",
+            "00",  # Peer address
+            "07",  # Channel map: all channels
+            "00",
+        ],  # Filter policy: all
+        capture_output=True,
+        timeout=5,
     )
 
-    # Build adv data: Flags + Name (must fit in 31 bytes)
-    # Flags: 0x02 = Length, 0x01 = Type (Flags), 0x06 = LE General Discoverable + BR/EDR Not Supported
-    adv = bytearray([0x02, 0x01, 0x06])
-    # Complete Local Name: length, 0x09, name bytes
-    adv += bytearray([len(name) + 1, 0x09]) + name.encode()
-    adv = adv.ljust(31, b"\x00")
+    # Set advertising data: Flags + Complete Local Name "PiBTBridge"
+    # Flags: 02 01 06 (length=2, type=flags, value=LE General Discoverable)
+    # Name: 0B 09 PiBTBridge (length=11, type=complete local name)
+    subprocess.run(
+        [
+            "sudo",
+            "hcitool",
+            "-i",
+            "hci0",
+            "cmd",
+            "0x08",
+            "0x0008",
+            "0E",  # Total length
+            "02",
+            "01",
+            "06",  # Flags
+            "0B",
+            "09",
+            "50",
+            "69",
+            "42",
+            "54",
+            "42",
+            "72",
+            "69",
+            "64",
+            "67",
+            "65",
+        ],  # "PiBTBridge"
+        capture_output=True,
+        timeout=5,
+    )
 
-    try:
-        subprocess.run(
-            ["sudo", "hcitool", "cmd", "0x08", "0x0008", f"0x{len(name) + 5:02x}"]
-            + [f"0x{b:02x}" for b in adv],
-            capture_output=True,
-            timeout=5,
-        )
-    except subprocess.TimeoutExpired:
-        log("Warning: hcitool advertising data timed out")
+    # Set scan response data with NUS UUID (128-bit)
+    # Type 0x07 = Complete List of 128-bit Service UUIDs
+    # NUS UUID little-endian: 9E CA DC 24 0E E5 A9 E0 93 F3 A3 B5 01 00 40 6E
+    subprocess.run(
+        [
+            "sudo",
+            "hcitool",
+            "-i",
+            "hci0",
+            "cmd",
+            "0x08",
+            "0x0009",
+            "12",  # Total length (18 bytes)
+            "11",
+            "07",  # Length=17, Type=Complete 128-bit UUIDs
+            "9E",
+            "CA",
+            "DC",
+            "24",
+            "0E",
+            "E5",
+            "A9",
+            "E0",
+            "93",
+            "F3",
+            "A3",
+            "B5",
+            "01",
+            "00",
+            "40",
+            "6E",
+        ],
+        capture_output=True,
+        timeout=5,
+    )
 
-    # Set scan response data with NUS service UUID (this is where we can put more data)
-    # Scan response can also be 31 bytes
-    scan_rsp = bytearray([17, 0x07]) + nus_uuid_le  # Length=17, Type=0x07 (Complete 128-bit UUIDs)
-    scan_rsp = scan_rsp.ljust(31, b"\x00")
-
-    try:
-        subprocess.run(
-            ["sudo", "hcitool", "cmd", "0x08", "0x0009", f"0x{18:02x}"]
-            + [f"0x{b:02x}" for b in scan_rsp],
-            capture_output=True,
-            timeout=5,
-        )
-        log("Set scan response with NUS UUID")
-    except subprocess.TimeoutExpired:
-        log("Warning: hcitool scan response data timed out")
+    # Enable LE advertising
+    result = subprocess.run(
+        ["sudo", "hcitool", "-i", "hci0", "cmd", "0x08", "0x000A", "01"],
+        capture_output=True,
+        timeout=5,
+    )
+    if b"20 00" in result.stdout:
+        log("BLE advertising enabled successfully")
+    else:
+        log(f"BLE advertising may have issues: {result.stdout}")
 
     log("")
     log("=" * 60)
