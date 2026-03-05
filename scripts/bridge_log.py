@@ -48,6 +48,7 @@ rfcomm_tx = None  # Raw socket for TX (this works for transmitting)
 rfcomm_rx = None  # PyBluez socket for RX (required for receiving)
 server = None
 log_file = None
+reader_task = None  # TNC reader task
 
 # Statistics
 stats = {
@@ -145,6 +146,111 @@ async def tnc_reader():
             break
 
 
+# --- Connection Management ---
+
+
+async def connect_classic():
+    """Connect to Classic Bluetooth TNC."""
+    global rfcomm_tx, rfcomm_rx, reader_task
+
+    if stats["classic_connected"]:
+        log("Classic BT already connected")
+        return True, "Already connected"
+
+    log("Connecting to TNC...")
+
+    # 1. Connect raw socket for TX
+    try:
+        rfcomm_tx = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+        rfcomm_tx.settimeout(15)
+        rfcomm_tx.connect((TH_D74_MAC, SPP_CHANNEL))
+        rfcomm_tx.settimeout(None)
+        stats["classic_connected"] = True
+        log("Raw TX socket CONNECTED!")
+    except Exception as e:
+        log(f"Failed to connect raw TX socket: {e}")
+        stats["classic_connected"] = False
+        rfcomm_tx = None
+        return False, str(e)
+
+    # 2. Try PyBluez socket for RX
+    try:
+        rfcomm_rx = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+        rfcomm_rx.connect((TH_D74_MAC, SPP_CHANNEL))
+        log("PyBluez RX socket CONNECTED!")
+    except Exception as e:
+        log(f"PyBluez RX socket failed (expected): {e}")
+        log("Using raw socket for both TX and RX")
+        rfcomm_rx = rfcomm_tx
+
+    # Start reader task
+    reader_task = asyncio.create_task(tnc_reader())
+    log("TNC connection established")
+    return True, "Connected"
+
+
+async def disconnect_classic():
+    """Disconnect Classic Bluetooth TNC."""
+    global rfcomm_tx, rfcomm_rx, reader_task
+
+    if not stats["classic_connected"]:
+        log("Classic BT already disconnected")
+        return True, "Already disconnected"
+
+    log("Disconnecting from TNC...")
+
+    # Cancel reader task
+    if reader_task:
+        reader_task.cancel()
+        try:
+            await reader_task
+        except asyncio.CancelledError:
+            pass
+        reader_task = None
+
+    # Close sockets
+    if rfcomm_rx and rfcomm_rx != rfcomm_tx:
+        try:
+            rfcomm_rx.close()
+        except Exception:
+            pass
+    rfcomm_rx = None
+
+    if rfcomm_tx:
+        try:
+            rfcomm_tx.close()
+        except Exception:
+            pass
+    rfcomm_tx = None
+
+    stats["classic_connected"] = False
+    log("TNC disconnected")
+    return True, "Disconnected"
+
+
+async def restart_ble():
+    """Restart BLE advertising."""
+    global server
+
+    log("Restarting BLE advertising...")
+
+    # Re-enable discoverable and advertising
+    try:
+        subprocess.run(["bluetoothctl", "discoverable", "on"], capture_output=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+    try:
+        subprocess.run(["sudo", "btmgmt", "advertising", "on"], capture_output=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+    # Reset BLE connection status (will be set true when phone writes)
+    stats["ble_connected"] = False
+    log("BLE advertising restarted")
+    return True, "BLE restarted"
+
+
 # --- Web Interface ---
 
 
@@ -153,6 +259,12 @@ async def handle_index(request):
     uptime = 0
     if stats["started_at"]:
         uptime = (datetime.now() - stats["started_at"]).total_seconds()
+
+    # Pre-define buttons to avoid backslash in f-string (Python 3.11 compat)
+    connect_btn = (
+        "<button class='btn btn-success' onclick=\"action('classic_connect')\">Connect</button>"
+    )
+    disconnect_btn = "<button class='btn btn-danger' onclick=\"action('classic_disconnect')\">Disconnect</button>"
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -170,6 +282,17 @@ async def handle_index(request):
         .stat {{ display: inline-block; text-align: center; padding: 10px 20px; }}
         .stat-value {{ font-size: 24px; font-weight: bold; }}
         .stat-label {{ font-size: 12px; color: #666; }}
+        .btn {{ padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; margin: 4px; }}
+        .btn-primary {{ background: #007bff; color: white; }}
+        .btn-success {{ background: #28a745; color: white; }}
+        .btn-danger {{ background: #dc3545; color: white; }}
+        .btn-warning {{ background: #ffc107; color: #333; }}
+        .btn:hover {{ opacity: 0.8; }}
+        .btn:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+        .controls {{ margin-top: 10px; }}
+        .toast {{ position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 12px 24px; border-radius: 8px; display: none; z-index: 1000; }}
+        .toast.show {{ display: block; animation: fadeIn 0.3s; }}
+        @keyframes fadeIn {{ from {{ opacity: 0; }} to {{ opacity: 1; }} }}
     </style>
 </head>
 <body>
@@ -178,9 +301,13 @@ async def handle_index(request):
     <div class="card">
         <h3>Connections</h3>
         <p>BLE (Phone): <span class="status {"connected" if stats["ble_connected"] else "disconnected"}">
-            {"Connected" if stats["ble_connected"] else "Waiting"}</span></p>
+            {"Connected" if stats["ble_connected"] else "Waiting"}</span>
+            <button class="btn btn-warning" onclick="action('ble_restart')">Restart BLE</button>
+        </p>
         <p>Classic (TNC): <span class="status {"connected" if stats["classic_connected"] else "disconnected"}">
-            {"Connected" if stats["classic_connected"] else "Disconnected"}</span></p>
+            {"Connected" if stats["classic_connected"] else "Disconnected"}</span>
+            {disconnect_btn if stats["classic_connected"] else connect_btn}
+        </p>
         <p>Target: <code>{TH_D74_MAC}</code> (RFCOMM {SPP_CHANNEL})</p>
     </div>
     
@@ -207,10 +334,43 @@ async def handle_index(request):
     <div class="card">
         <h3>System</h3>
         <p>Uptime: {int(uptime)}s</p>
-        <p>Version: 1.0.0</p>
+        <p>Version: 1.1.0</p>
+        <div class="controls">
+            <button class="btn btn-danger" onclick="action('restart')">Restart Bridge</button>
+        </div>
     </div>
     
-    <script>setTimeout(() => location.reload(), 5000);</script>
+    <div id="toast" class="toast"></div>
+    
+    <script>
+        let autoRefresh = true;
+        
+        async function action(name) {{
+            autoRefresh = false;  // Pause auto-refresh during action
+            const toast = document.getElementById('toast');
+            toast.textContent = 'Working...';
+            toast.classList.add('show');
+            
+            try {{
+                const resp = await fetch('/api/action/' + name, {{ method: 'POST' }});
+                const data = await resp.json();
+                toast.textContent = data.message || (data.success ? 'Success' : 'Failed');
+                setTimeout(() => {{
+                    toast.classList.remove('show');
+                    location.reload();
+                }}, 1500);
+            }} catch (e) {{
+                toast.textContent = 'Error: ' + e.message;
+                setTimeout(() => {{
+                    toast.classList.remove('show');
+                    autoRefresh = true;
+                }}, 3000);
+            }}
+        }}
+        
+        // Auto-refresh every 5 seconds
+        setTimeout(() => {{ if (autoRefresh) location.reload(); }}, 5000);
+    </script>
 </body>
 </html>"""
     return web.Response(text=html, content_type="text/html")
@@ -237,6 +397,37 @@ async def handle_api_status(request):
     )
 
 
+async def handle_api_action(request):
+    """Handle control actions."""
+    action = request.match_info.get("action", "")
+    log(f"Web action requested: {action}")
+
+    if action == "classic_connect":
+        success, message = await connect_classic()
+        return web.json_response({"success": success, "message": message})
+
+    elif action == "classic_disconnect":
+        success, message = await disconnect_classic()
+        return web.json_response({"success": success, "message": message})
+
+    elif action == "ble_restart":
+        success, message = await restart_ble()
+        return web.json_response({"success": success, "message": message})
+
+    elif action == "restart":
+        log("Restart requested via web interface")
+        # Use systemctl to restart the service (will kill this process)
+        import os
+
+        os.system("sudo systemctl restart bt-bridge &")
+        return web.json_response({"success": True, "message": "Restarting..."})
+
+    else:
+        return web.json_response(
+            {"success": False, "message": f"Unknown action: {action}"}, status=400
+        )
+
+
 async def start_web_server():
     """Start the web server."""
     if not HAS_WEB:
@@ -245,6 +436,7 @@ async def start_web_server():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/api/status", handle_api_status)
+    app.router.add_post("/api/action/{action}", handle_api_action)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -255,7 +447,7 @@ async def start_web_server():
 
 
 async def main():
-    global rfcomm_tx, rfcomm_rx, server, log_file
+    global rfcomm_tx, rfcomm_rx, server, log_file, reader_task
 
     stats["started_at"] = datetime.now()
     log_file = open("/tmp/bridge_packets.log", "w")
@@ -266,37 +458,9 @@ async def main():
     # Start web server
     web_runner = await start_web_server()
 
-    # DISCOVERY: Raw socket works for TX, PyBluez works for RX
-    # Try connecting raw socket FIRST, then see if PyBluez can also connect
-
-    # 1. Connect raw socket for TRANSMITTING (connect first!)
-    log("Connecting raw socket for TX...")
-    rfcomm_tx = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
-    rfcomm_tx.settimeout(15)
-    try:
-        rfcomm_tx.connect((TH_D74_MAC, SPP_CHANNEL))
-        rfcomm_tx.settimeout(None)
-        stats["classic_connected"] = True
-        log("Raw TX socket CONNECTED!")
-    except Exception as e:
-        log(f"Failed to connect raw TX socket: {e}")
-        stats["classic_connected"] = False
-        # Don't return - keep web server running for status
-
-    # Skip KISS parameters - they might be interfering
-    log("Skipping KISS parameter configuration (testing)")
-
-    # 2. Try to connect PyBluez socket for RECEIVING
-    if stats["classic_connected"]:
-        log("Attempting PyBluez socket for RX...")
-        try:
-            rfcomm_rx = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-            rfcomm_rx.connect((TH_D74_MAC, SPP_CHANNEL))
-            log("PyBluez RX socket CONNECTED!")
-        except Exception as e:
-            log(f"PyBluez RX socket failed (expected): {e}")
-            log("Using raw socket for both TX and RX")
-            rfcomm_rx = rfcomm_tx
+    # Try to connect to TNC at startup
+    log("Attempting initial TNC connection...")
+    await connect_classic()
 
     log("Starting BLE server...")
     server = BlessServer(name="PiBTBridge", loop=None)
@@ -355,11 +519,6 @@ async def main():
     log("=" * 60)
     log("")
 
-    # Start TNC reader task if connected
-    reader_task = None
-    if stats["classic_connected"] and rfcomm_rx:
-        reader_task = asyncio.create_task(tnc_reader())
-
     # Run indefinitely (for systemd service)
     try:
         while True:
@@ -367,8 +526,13 @@ async def main():
     except asyncio.CancelledError:
         pass
 
+    # Cleanup
     if reader_task:
         reader_task.cancel()
+        try:
+            await reader_task
+        except asyncio.CancelledError:
+            pass
     if rfcomm_rx:
         rfcomm_rx.close()
     if rfcomm_tx and rfcomm_tx != rfcomm_rx:
