@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}Statistics - Pi BT Bridge{% endblock %}
+
+{% block content %}
+<h2>Statistics</h2>
+
+<div class="card">
+    <h3>Packet Counters</h3>
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-value" id="frames-bridged">{{ stats.packets_tx }}</div>
+            <div class="stat-label">Frames Bridged</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="bytes-tx">{{ stats.bytes_tx }}</div>
+            <div class="stat-label">Bytes to TNC</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="bytes-rx">{{ stats.bytes_rx }}</div>
+            <div class="stat-label">Bytes from TNC</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="errors" {% if stats.errors > 0 %}style="color: var(--error-color);"{% endif %}>{{ stats.errors }}</div>
+            <div class="stat-label">Errors</div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Connection Info</h3>
+    <div class="status-row">
+        <span class="status-label">BLE Status</span>
+        <span class="status-value">
+            <span class="status-badge {{ status.ble.state.value }}">{{ status.ble.state.value | title }}</span>
+        </span>
+    </div>
+    <div class="status-row">
+        <span class="status-label">Classic Status</span>
+        <span class="status-value">
+            <span class="status-badge {{ status.classic.state.value }}">{{ status.classic.state.value | title }}</span>
+        </span>
+    </div>
+    <div class="status-row">
+        <span class="status-label">Uptime</span>
+        <span class="status-value" id="uptime">{{ "%.0f"|format(status.uptime_seconds) }}s</span>
+    </div>
+    <div class="status-row">
+        <span class="status-label">Started</span>
+        <span class="status-value">{{ status.started_at }}</span>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Throughput</h3>
+    <div class="status-row">
+        <span class="status-label">Total Bytes</span>
+        <span class="status-value" id="total-bytes">{{ stats.bytes_tx + stats.bytes_rx }}</span>
+    </div>
+    <div class="status-row">
+        <span class="status-label">Avg Rate</span>
+        <span class="status-value" id="avg-rate">
+            {% if status.uptime_seconds > 0 %}
+                {{ "%.1f"|format((stats.bytes_tx + stats.bytes_rx) / status.uptime_seconds) }} B/s
+            {% else %}
+                0 B/s
+            {% endif %}
+        </span>
+    </div>
+</div>
+
+<div class="mt-2">
+    <button class="btn btn-secondary" onclick="refreshStats()">Refresh</button>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function refreshStats() {
+    try {
+        const response = await fetch('/api/stats');
+        const stats = await response.json();
+        
+        document.getElementById('frames-bridged').textContent = stats.packets_tx;
+        document.getElementById('bytes-tx').textContent = stats.bytes_tx;
+        document.getElementById('bytes-rx').textContent = stats.bytes_rx;
+        document.getElementById('errors').textContent = stats.errors;
+        document.getElementById('total-bytes').textContent = stats.bytes_tx + stats.bytes_rx;
+    } catch (error) {
+        console.error('Failed to refresh stats:', error);
+    }
+}
+
+// Auto-refresh every 5 seconds
+setInterval(refreshStats, 5000);
+
+// Update uptime every second
+let uptimeSeconds = {{ status.uptime_seconds }};
+setInterval(function() {
+    uptimeSeconds++;
+    document.getElementById('uptime').textContent = Math.floor(uptimeSeconds) + 's';
+}, 1000);
+</script>
+{% endblock %}

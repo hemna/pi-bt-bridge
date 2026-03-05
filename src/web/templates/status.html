@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}Status - Pi BT Bridge{% endblock %}
+
+{% block content %}
+<h2>Bridge Status</h2>
+
+<div class="connection-grid">
+    <!-- BLE Connection -->
+    <div class="connection-card {{ 'connected' if status.ble.state.value == 'connected' else 'disconnected' }}">
+        <h3>
+            BLE (Phone)
+            <span class="status-badge {{ status.ble.state.value }}">{{ status.ble.state.value | title }}</span>
+        </h3>
+        <div class="connection-details">
+            {% if status.ble.state.value == 'connected' %}
+                <p><strong>Device:</strong> {{ status.ble.device_name or 'Unknown' }}</p>
+                {% if status.ble.device_address %}
+                <p><strong>Address:</strong> <code>{{ status.ble.device_address }}</code></p>
+                {% endif %}
+                {% if status.ble.connected_at %}
+                <p><strong>Connected:</strong> {{ status.ble.connected_at }}</p>
+                {% endif %}
+            {% else %}
+                <p>Waiting for phone to connect...</p>
+                {% if status.ble.advertising %}
+                <p class="text-muted">Advertising as "{{ config.device_name }}"</p>
+                {% endif %}
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Classic Connection -->
+    <div class="connection-card {{ 'connected' if status.classic.state.value == 'connected' else 'disconnected' }}">
+        <h3>
+            Classic (TNC)
+            <span class="status-badge {{ status.classic.state.value }}">{{ status.classic.state.value | title }}</span>
+        </h3>
+        <div class="connection-details">
+            {% if status.classic.state.value == 'connected' %}
+                <p><strong>Device:</strong> {{ status.classic.target_name or 'TNC' }}</p>
+                <p><strong>Address:</strong> <code>{{ status.classic.target_address }}</code></p>
+                <p><strong>Channel:</strong> RFCOMM {{ status.classic.rfcomm_channel }}</p>
+                {% if status.classic.connected_at %}
+                <p><strong>Connected:</strong> {{ status.classic.connected_at }}</p>
+                {% endif %}
+            {% else %}
+                <p><strong>Target:</strong> <code>{{ status.classic.target_address }}</code></p>
+                <p><strong>Channel:</strong> RFCOMM {{ status.classic.rfcomm_channel }}</p>
+                {% if status.classic.state.value == 'connecting' %}
+                <p class="text-muted">Connecting...</p>
+                {% elif status.classic.state.value == 'error' %}
+                <p class="text-muted" style="color: var(--error-color);">Connection failed</p>
+                {% else %}
+                <p class="text-muted">Not connected</p>
+                {% endif %}
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="card mt-2">
+    <h3>Bridge Info</h3>
+    <div class="status-row">
+        <span class="status-label">Device Name</span>
+        <span class="status-value">{{ config.device_name }}</span>
+    </div>
+    <div class="status-row">
+        <span class="status-label">Uptime</span>
+        <span class="status-value" id="uptime">{{ "%.1f"|format(status.uptime_seconds) }}s</span>
+    </div>
+    <div class="status-row">
+        <span class="status-label">Started</span>
+        <span class="status-value">{{ status.started_at }}</span>
+    </div>
+    <div class="status-row">
+        <span class="status-label">Version</span>
+        <span class="status-value">{{ status.version }}</span>
+    </div>
+</div>
+
+{% if status.ble.state.value == 'connected' and status.classic.state.value == 'connected' %}
+<div class="alert alert-success mt-2">
+    Bridge is active! Packets are being forwarded between phone and TNC.
+</div>
+{% elif status.ble.state.value != 'connected' and status.classic.state.value != 'connected' %}
+<div class="alert alert-warning mt-2">
+    Both connections are inactive. Connect a phone via BLE and ensure TNC is paired.
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Optional: Auto-refresh status via SSE
+if (typeof EventSource !== 'undefined') {
+    const evtSource = new EventSource('/api/status/stream');
+    
+    evtSource.addEventListener('status', function(event) {
+        // Reload page on status change for simplicity
+        // A more sophisticated implementation would update DOM elements
+        location.reload();
+    });
+    
+    evtSource.addEventListener('error', function(event) {
+        console.log('SSE connection error, will retry...');
+    });
+}
+
+// Update uptime every second
+setInterval(function() {
+    const uptimeEl = document.getElementById('uptime');
+    if (uptimeEl) {
+        const current = parseFloat(uptimeEl.textContent);
+        uptimeEl.textContent = (current + 1).toFixed(1) + 's';
+    }
+}, 1000);
+</script>
+{% endblock %}

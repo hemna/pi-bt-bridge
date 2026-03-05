@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Pi BT Bridge{% endblock %}
+
+{% block content %}
+<h2>Settings</h2>
+
+<form id="settings-form" onsubmit="saveSettings(event)">
+    <div class="card">
+        <h3>Bridge Configuration</h3>
+        
+        <div class="form-group">
+            <label for="device_name">Device Name</label>
+            <input type="text" id="device_name" name="device_name" 
+                   value="{{ config.device_name }}"
+                   maxlength="20" pattern="[A-Za-z0-9\-]+"
+                   required>
+            <p class="hint">Name advertised over BLE (1-20 alphanumeric characters)</p>
+        </div>
+        
+        <div class="form-group">
+            <label for="target_address">Target TNC Address</label>
+            <input type="text" id="target_address" name="target_address"
+                   value="{{ config.target_address }}"
+                   pattern="([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}"
+                   placeholder="00:11:22:33:44:55"
+                   required>
+            <p class="hint">Bluetooth MAC address of your TNC (e.g., TH-D74)</p>
+        </div>
+        
+        <div class="form-group">
+            <label for="rfcomm_channel">RFCOMM Channel</label>
+            <input type="number" id="rfcomm_channel" name="rfcomm_channel"
+                   value="{{ config.rfcomm_channel }}"
+                   min="1" max="30"
+                   required>
+            <p class="hint">SPP channel (use sdptool browse to find, TH-D74 uses channel 2)</p>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>Logging</h3>
+        
+        <div class="form-group">
+            <label for="log_level">Log Level</label>
+            <select id="log_level" name="log_level">
+                <option value="DEBUG" {% if config.log_level == 'DEBUG' %}selected{% endif %}>Debug</option>
+                <option value="INFO" {% if config.log_level == 'INFO' %}selected{% endif %}>Info</option>
+                <option value="WARNING" {% if config.log_level == 'WARNING' %}selected{% endif %}>Warning</option>
+                <option value="ERROR" {% if config.log_level == 'ERROR' %}selected{% endif %}>Error</option>
+            </select>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>Web Interface</h3>
+        
+        <div class="form-group">
+            <label for="web_port">HTTP Port</label>
+            <input type="number" id="web_port" name="web_port"
+                   value="{{ config.web_port }}"
+                   min="1024" max="65535"
+                   required>
+            <p class="hint">Port for web interface (requires restart)</p>
+        </div>
+    </div>
+    
+    <div class="mt-2">
+        <button type="submit" class="btn btn-primary" id="save-btn">Save Settings</button>
+        <button type="button" class="btn btn-danger" onclick="restartBridge()">Restart Bridge</button>
+    </div>
+</form>
+
+<div id="save-result" class="mt-2 hidden"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function saveSettings(event) {
+    event.preventDefault();
+    
+    const form = document.getElementById('settings-form');
+    const saveBtn = document.getElementById('save-btn');
+    const resultDiv = document.getElementById('save-result');
+    
+    const data = {
+        device_name: form.device_name.value,
+        target_address: form.target_address.value,
+        rfcomm_channel: parseInt(form.rfcomm_channel.value),
+        log_level: form.log_level.value,
+        web_port: parseInt(form.web_port.value)
+    };
+    
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+    
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        const result = await response.json();
+        
+        resultDiv.classList.remove('hidden', 'alert-error');
+        
+        if (response.ok) {
+            resultDiv.className = 'alert alert-success mt-2';
+            resultDiv.textContent = result.message || 'Settings saved successfully!';
+            
+            if (result.restart_required) {
+                resultDiv.innerHTML += '<br><br>Some changes require a restart to take effect.';
+            }
+        } else {
+            resultDiv.className = 'alert alert-error mt-2';
+            resultDiv.textContent = result.error || 'Failed to save settings';
+            
+            if (result.details) {
+                resultDiv.innerHTML += '<br><br>Details:<br>';
+                for (const [field, error] of Object.entries(result.details)) {
+                    resultDiv.innerHTML += `- ${field}: ${error}<br>`;
+                }
+            }
+        }
+    } catch (error) {
+        resultDiv.className = 'alert alert-error mt-2';
+        resultDiv.classList.remove('hidden');
+        resultDiv.textContent = 'Network error: ' + error.message;
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Settings';
+    }
+}
+
+async function restartBridge() {
+    if (!confirm('Are you sure you want to restart the bridge? Active connections will be dropped.')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/restart', { method: 'POST' });
+        const result = await response.json();
+        
+        alert('Bridge is restarting. Page will reload in 5 seconds...');
+        setTimeout(() => location.reload(), 5000);
+    } catch (error) {
+        alert('Restart failed: ' + error.message);
+    }
+}
+</script>
+{% endblock %}

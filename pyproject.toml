@@ -25,6 +25,8 @@ dependencies = [
     "bless>=0.3.0",
     "dbus-python>=1.3.2",
     "PyGObject>=3.42.0",
+    "aiohttp>=3.9.0",
+    "aiohttp-jinja2>=1.6.0",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +70,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["ARG001", "ARG002"]  # Unused function arguments OK in tests
+"src/services/web_service.py" = ["ARG002"]  # Request parameter required by aiohttp handlers
 
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
@@ -92,6 +95,7 @@ module = [
     "bless.*",
     "dbus.*",
     "gi.*",
+    "aiohttp_jinja2.*",
 ]
 ignore_missing_imports = true
 

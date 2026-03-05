@@ -66,8 +66,8 @@ class PairingAgent:
         """Run the agent main loop (called in background thread)."""
         try:
             import dbus
-            import dbus.service
             import dbus.mainloop.glib
+            import dbus.service
             from gi.repository import GLib
 
             # Set up D-Bus main loop

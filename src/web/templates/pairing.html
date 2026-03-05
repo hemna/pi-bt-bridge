@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+
+{% block title %}Pairing - Pi BT Bridge{% endblock %}
+
+{% block content %}
+<h2>Bluetooth Pairing</h2>
+
+<div class="card">
+    <h3>Scan for Devices</h3>
+    <p class="text-muted mb-2">
+        Scan for nearby Bluetooth Classic devices to pair with your TNC.
+    </p>
+    
+    <button id="scan-btn" class="btn btn-primary" onclick="startScan()">
+        <span id="scan-text">Scan for Devices</span>
+        <span id="scan-spinner" class="spinner hidden"></span>
+    </button>
+</div>
+
+<div class="card" id="devices-card">
+    <h3>Discovered Devices</h3>
+    
+    {% if session.state.value == 'scanning' %}
+    <div class="alert alert-info">
+        <span class="spinner"></span> Scanning for devices...
+    </div>
+    {% elif session.discovered_devices %}
+    <ul class="device-list">
+        {% for device in session.discovered_devices %}
+        <li class="device-item">
+            <div class="device-info">
+                <div class="device-name">
+                    {{ device.name or 'Unknown Device' }}
+                    {% if device.has_spp %}
+                    <span class="status-badge connected" style="font-size: 0.75rem;">SPP</span>
+                    {% endif %}
+                    {% if device.paired %}
+                    <span class="status-badge idle" style="font-size: 0.75rem;">Paired</span>
+                    {% endif %}
+                </div>
+                <div class="device-address">{{ device.address }}</div>
+                {% if device.rssi %}
+                <div class="device-rssi">Signal: {{ device.rssi }} dBm</div>
+                {% endif %}
+            </div>
+            <div>
+                {% if device.paired %}
+                <button class="btn btn-primary" onclick="useDevice('{{ device.address }}', '{{ device.name or 'Unknown' }}')">Use as TNC</button>
+                {% else %}
+                <button class="btn btn-secondary" onclick="pairDevice('{{ device.address }}')">Pair</button>
+                {% endif %}
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-muted">No devices found. Click "Scan for Devices" to search.</p>
+    {% endif %}
+</div>
+
+{% if session.state.value == 'pin_required' %}
+<div class="card" id="pin-card">
+    <h3>PIN Required</h3>
+    <p class="text-muted mb-2">
+        Enter the PIN displayed on {{ session.target_name or session.target_address }}:
+    </p>
+    <form onsubmit="submitPin(event)">
+        <div class="form-group">
+            <input type="text" id="pin-input" maxlength="6" placeholder="0000" pattern="[0-9]*">
+        </div>
+        <button type="submit" class="btn btn-primary">Submit PIN</button>
+    </form>
+</div>
+{% endif %}
+
+{% if session.state.value == 'success' %}
+<div class="alert alert-success">
+    Successfully paired with {{ session.target_name or session.target_address }}!
+    <br><br>
+    <button class="btn btn-primary" onclick="useDevice('{{ session.target_address }}', '{{ session.target_name or 'Unknown' }}')">
+        Use as Target TNC
+    </button>
+</div>
+{% elif session.state.value == 'failed' %}
+<div class="alert alert-error">
+    Pairing failed: {{ session.error_message or 'Unknown error' }}
+</div>
+{% endif %}
+
+<div class="card mt-2">
+    <h3>Current Target</h3>
+    <div class="status-row">
+        <span class="status-label">Address</span>
+        <span class="status-value"><code>{{ config.target_address }}</code></span>
+    </div>
+    <div class="status-row">
+        <span class="status-label">RFCOMM Channel</span>
+        <span class="status-value">{{ config.rfcomm_channel }}</span>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function startScan() {
+    const btn = document.getElementById('scan-btn');
+    const text = document.getElementById('scan-text');
+    const spinner = document.getElementById('scan-spinner');
+    
+    btn.disabled = true;
+    text.textContent = 'Scanning...';
+    spinner.classList.remove('hidden');
+    
+    try {
+        const response = await fetch('/api/pairing/scan', { method: 'POST' });
+        const data = await response.json();
+        
+        // Poll for results
+        setTimeout(pollDevices, 2000);
+    } catch (error) {
+        alert('Scan failed: ' + error.message);
+        btn.disabled = false;
+        text.textContent = 'Scan for Devices';
+        spinner.classList.add('hidden');
+    }
+}
+
+async function pollDevices() {
+    try {
+        const response = await fetch('/api/pairing/devices');
+        const data = await response.json();
+        
+        if (data.state === 'scanning') {
+            // Still scanning, poll again
+            setTimeout(pollDevices, 2000);
+        } else {
+            // Scan complete, reload page
+            location.reload();
+        }
+    } catch (error) {
+        console.error('Poll failed:', error);
+        location.reload();
+    }
+}
+
+async function pairDevice(address) {
+    try {
+        const response = await fetch('/api/pairing/pair', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ address: address })
+        });
+        const data = await response.json();
+        
+        // Poll for pairing status
+        setTimeout(pollPairingStatus, 1000);
+    } catch (error) {
+        alert('Pairing failed: ' + error.message);
+    }
+}
+
+async function pollPairingStatus() {
+    try {
+        const response = await fetch('/api/pairing/status');
+        const data = await response.json();
+        
+        if (data.state === 'pairing') {
+            setTimeout(pollPairingStatus, 1000);
+        } else {
+            location.reload();
+        }
+    } catch (error) {
+        location.reload();
+    }
+}
+
+async function submitPin(event) {
+    event.preventDefault();
+    const pin = document.getElementById('pin-input').value;
+    
+    try {
+        const response = await fetch('/api/pairing/pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin: pin })
+        });
+        const data = await response.json();
+        location.reload();
+    } catch (error) {
+        alert('PIN submission failed: ' + error.message);
+    }
+}
+
+async function useDevice(address, name) {
+    if (!confirm(`Set ${name} (${address}) as the target TNC?\n\nThis will save the configuration and require a restart.`)) {
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/pairing/use', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ address: address })
+        });
+        const data = await response.json();
+        
+        if (response.ok) {
+            alert(data.message + '\n\nClick OK to restart the bridge.');
+            // Trigger restart
+            await fetch('/api/restart', { method: 'POST' });
+            setTimeout(() => location.reload(), 3000);
+        } else {
+            alert('Failed: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        alert('Failed to save: ' + error.message);
+    }
+}
+</script>
+{% endblock %}

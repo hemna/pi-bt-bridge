@@ -39,6 +39,9 @@ class Configuration:
         buffer_size: Queue buffer size in bytes.
         reconnect_max_delay: Maximum reconnect wait in seconds.
         status_socket: Unix socket path for status queries.
+        web_enabled: Enable web interface.
+        web_port: HTTP port for web interface.
+        web_host: Host to bind web interface to.
     """
 
     target_address: str
@@ -50,6 +53,9 @@ class Configuration:
     buffer_size: int = 4096
     reconnect_max_delay: int = 30
     status_socket: str = "/var/run/bt-bridge.sock"
+    web_enabled: bool = True
+    web_port: int = 8080
+    web_host: str = "0.0.0.0"
 
     def __post_init__(self) -> None:
         """Validate configuration fields."""
@@ -91,6 +97,10 @@ class Configuration:
         if not 1 <= self.rfcomm_channel <= 30:
             errors.append(f"rfcomm_channel must be 1-30, got: {self.rfcomm_channel}")
 
+        # Validate web_port (1024-65535)
+        if not 1024 <= self.web_port <= 65535:
+            errors.append(f"web_port must be 1024-65535, got: {self.web_port}")
+
         if errors:
             raise ConfigurationError("; ".join(errors))
 
@@ -123,6 +133,9 @@ class Configuration:
                 buffer_size=int(data.get("buffer_size", 4096)),  # type: ignore[arg-type]
                 reconnect_max_delay=int(data.get("reconnect_max_delay", 30)),  # type: ignore[arg-type]
                 status_socket=str(data.get("status_socket", "/var/run/bt-bridge.sock")),
+                web_enabled=bool(data.get("web_enabled", True)),
+                web_port=int(data.get("web_port", 8080)),  # type: ignore[arg-type]
+                web_host=str(data.get("web_host", "0.0.0.0")),
             )
         except (TypeError, ValueError) as e:
             raise ConfigurationError(f"Invalid configuration data: {e}") from e
