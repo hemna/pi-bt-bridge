@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import subprocess
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
@@ -77,16 +79,56 @@ class BLEService:
         """Set callback for state changes."""
         self._on_state_changed = callback
 
+    def _setup_adapter_discoverable(self) -> None:
+        """Make the Bluetooth adapter discoverable so iOS can see it."""
+        try:
+            # Set adapter alias to our device name
+            subprocess.run(
+                ["bluetoothctl", "system-alias", self._device_name],
+                capture_output=True,
+                timeout=5,
+            )
+            # Make adapter discoverable
+            subprocess.run(
+                ["bluetoothctl", "discoverable", "on"],
+                capture_output=True,
+                timeout=5,
+            )
+            # Make adapter pairable
+            subprocess.run(
+                ["bluetoothctl", "pairable", "on"],
+                capture_output=True,
+                timeout=5,
+            )
+            logger.info("Bluetooth adapter set discoverable as '%s'", self._device_name)
+        except Exception as e:
+            logger.warning("Could not set adapter discoverable: %s", e)
+
+    def _restore_adapter_settings(self) -> None:
+        """Restore adapter settings on shutdown."""
+        try:
+            subprocess.run(
+                ["bluetoothctl", "discoverable", "off"],
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception:
+            pass
+
     async def start(self) -> None:
         """
         Start the BLE GATT server and begin advertising.
 
         Creates the NUS service and characteristics, then starts advertising.
+        Also makes the Bluetooth adapter discoverable so iOS can see it in Settings.
         """
         try:
             from bless import BlessServer, GATTCharacteristicProperties, GATTAttributePermissions
 
             logger.info("Starting BLE service", extra={"device_name": self._device_name})
+
+            # Make adapter discoverable for iOS Settings -> Bluetooth
+            self._setup_adapter_discoverable()
 
             # Create server
             self._server = BlessServer(name=self._device_name, loop=None)
@@ -144,6 +186,9 @@ class BLEService:
             except Exception as e:
                 logger.warning("Error stopping BLE server: %s", e)
             self._server = None
+
+        # Restore adapter settings
+        self._restore_adapter_settings()
 
         self._is_advertising = False
         self._update_state(ConnectionState.IDLE)

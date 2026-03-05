@@ -14,6 +14,7 @@ from src.models.state import BridgeState
 from src.services.ble_service import BLEService
 from src.services.bridge import BridgeService
 from src.services.classic_service import ClassicService
+from src.services.pairing_agent import PairingAgent
 from src.util.logging import get_logger, setup_logging
 
 logger = get_logger("main")
@@ -35,6 +36,10 @@ async def run_daemon(config: Configuration) -> None:
     logger.info("Starting BT bridge daemon")
     logger.info("Target TNC: %s", config.target_address)
     logger.info("Device name: %s", config.device_name)
+
+    # Start pairing agent for auto-accepting Bluetooth connections
+    pairing_agent = PairingAgent(device_name=config.device_name)
+    pairing_agent.start()
 
     # Create connection states
     ble_conn = BLEConnection()
@@ -90,6 +95,7 @@ async def run_daemon(config: Configuration) -> None:
         # Graceful shutdown
         logger.info("Shutting down daemon")
         await bridge.stop()
+        pairing_agent.stop()
         logger.info("Daemon stopped")
 
 
