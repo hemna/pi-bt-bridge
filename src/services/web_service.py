@@ -25,6 +25,8 @@ from src.web.models import (
     ClassicStatus,
     ConnectionState,
     PacketStatistics,
+    TcpKissClientStatus,
+    TcpKissStatus,
 )
 
 if TYPE_CHECKING:
@@ -254,6 +256,33 @@ class WebService:
                 connected_at=self.bridge_state.classic.connected_at,
                 rfcomm_channel=self.config.rfcomm_channel,
             )
+
+            # Build TCP KISS status
+            tcp_kiss_clients = [
+                TcpKissClientStatus(
+                    remote_address=client.remote_address,
+                    connected_at=client.connected_at.isoformat() if client.connected_at else None,
+                    bytes_rx=client.bytes_rx,
+                    bytes_tx=client.bytes_tx,
+                )
+                for client in self.bridge_state.tcp_clients
+            ]
+            tcp_listening = False
+            tcp_port = self.config.tcp_kiss_port
+            if self._bridge_service and self._bridge_service.tcp_service:
+                tcp_service = self._bridge_service.tcp_service
+                tcp_listening = tcp_service.is_running
+                if tcp_service.is_running:
+                    tcp_port = tcp_service.port
+            tcp_kiss_status = TcpKissStatus(
+                enabled=self.config.tcp_kiss_enabled,
+                listening=tcp_listening,
+                port=tcp_port,
+                host=self.config.tcp_kiss_host,
+                client_count=len(tcp_kiss_clients),
+                max_clients=self.config.tcp_kiss_max_clients,
+                clients=tcp_kiss_clients,
+            )
         else:
             # Default status when no bridge state available
             ble_status = BLEStatus(state=ConnectionState.IDLE)
@@ -262,10 +291,20 @@ class WebService:
                 target_address=self.config.target_address,
                 rfcomm_channel=self.config.rfcomm_channel,
             )
+            tcp_kiss_status = TcpKissStatus(
+                enabled=self.config.tcp_kiss_enabled,
+                listening=False,
+                port=self.config.tcp_kiss_port,
+                host=self.config.tcp_kiss_host,
+                client_count=0,
+                max_clients=self.config.tcp_kiss_max_clients,
+                clients=[],
+            )
 
         return BridgeStatus(
             ble=ble_status,
             classic=classic_status,
+            tcp_kiss=tcp_kiss_status,
             started_at=self._started_at or datetime.now(),
         )
 
@@ -445,6 +484,10 @@ class WebService:
                 "rfcomm_channel": self.config.rfcomm_channel,
                 "log_level": self.config.log_level,
                 "web_port": self.config.web_port,
+                "tcp_kiss_enabled": self.config.tcp_kiss_enabled,
+                "tcp_kiss_port": self.config.tcp_kiss_port,
+                "tcp_kiss_host": self.config.tcp_kiss_host,
+                "tcp_kiss_max_clients": self.config.tcp_kiss_max_clients,
             }
         )
 
@@ -502,6 +545,31 @@ class WebService:
         except (TypeError, ValueError):
             errors["web_port"] = "Web port must be a number"
 
+        # Validate TCP KISS settings
+        tcp_kiss_enabled = data.get("tcp_kiss_enabled", self.config.tcp_kiss_enabled)
+        if not isinstance(tcp_kiss_enabled, bool):
+            errors["tcp_kiss_enabled"] = "Must be true or false"
+
+        tcp_kiss_port = data.get("tcp_kiss_port", self.config.tcp_kiss_port)
+        try:
+            tcp_kiss_port = int(tcp_kiss_port)
+            if not 1024 <= tcp_kiss_port <= 65535:
+                errors["tcp_kiss_port"] = "TCP KISS port must be 1024-65535"
+        except (TypeError, ValueError):
+            errors["tcp_kiss_port"] = "TCP KISS port must be a number"
+
+        tcp_kiss_host = data.get("tcp_kiss_host", self.config.tcp_kiss_host)
+        if not isinstance(tcp_kiss_host, str) or not tcp_kiss_host:
+            errors["tcp_kiss_host"] = "TCP KISS host is required"
+
+        tcp_kiss_max_clients = data.get("tcp_kiss_max_clients", self.config.tcp_kiss_max_clients)
+        try:
+            tcp_kiss_max_clients = int(tcp_kiss_max_clients)
+            if not 1 <= tcp_kiss_max_clients <= 20:
+                errors["tcp_kiss_max_clients"] = "Max clients must be 1-20"
+        except (TypeError, ValueError):
+            errors["tcp_kiss_max_clients"] = "Max clients must be a number"
+
         # Return validation errors if any
         if errors:
             return web.json_response(
@@ -518,6 +586,10 @@ class WebService:
             or target_address != self.config.target_address
             or rfcomm_channel != self.config.rfcomm_channel
             or web_port != self.config.web_port
+            or tcp_kiss_enabled != self.config.tcp_kiss_enabled
+            or tcp_kiss_port != self.config.tcp_kiss_port
+            or tcp_kiss_host != self.config.tcp_kiss_host
+            or tcp_kiss_max_clients != self.config.tcp_kiss_max_clients
         )
 
         # Update config object
@@ -526,6 +598,10 @@ class WebService:
         self.config.rfcomm_channel = rfcomm_channel
         self.config.log_level = log_level.upper()
         self.config.web_port = web_port
+        self.config.tcp_kiss_enabled = tcp_kiss_enabled
+        self.config.tcp_kiss_port = tcp_kiss_port
+        self.config.tcp_kiss_host = tcp_kiss_host
+        self.config.tcp_kiss_max_clients = tcp_kiss_max_clients
 
         # Save to file
         try:

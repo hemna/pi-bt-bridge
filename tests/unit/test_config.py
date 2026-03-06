@@ -181,3 +181,98 @@ class TestConfigurationPersistence:
 
         assert isinstance(data, dict)
         assert data["target_address"] == "00:11:22:33:44:55"
+
+
+class TestTcpKissConfiguration:
+    """Unit tests for TCP KISS configuration (T062)."""
+
+    def test_tcp_kiss_defaults(self) -> None:
+        """TCP KISS has sensible defaults."""
+        config = Configuration(target_address="00:11:22:33:44:55")
+
+        assert config.tcp_kiss_enabled is True
+        assert config.tcp_kiss_port == 8001
+        assert config.tcp_kiss_host == "0.0.0.0"
+        assert config.tcp_kiss_max_clients == 5
+
+    def test_tcp_kiss_custom_values(self) -> None:
+        """TCP KISS accepts custom configuration."""
+        config = Configuration(
+            target_address="00:11:22:33:44:55",
+            tcp_kiss_enabled=True,
+            tcp_kiss_port=9001,
+            tcp_kiss_host="127.0.0.1",
+            tcp_kiss_max_clients=10,
+        )
+
+        assert config.tcp_kiss_enabled is True
+        assert config.tcp_kiss_port == 9001
+        assert config.tcp_kiss_host == "127.0.0.1"
+        assert config.tcp_kiss_max_clients == 10
+
+    def test_tcp_kiss_disabled(self) -> None:
+        """TCP KISS can be disabled."""
+        config = Configuration(
+            target_address="00:11:22:33:44:55",
+            tcp_kiss_enabled=False,
+        )
+
+        assert config.tcp_kiss_enabled is False
+
+    def test_invalid_tcp_kiss_port_low(self) -> None:
+        """TCP KISS port below 1024 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError) as exc:
+            Configuration(
+                target_address="00:11:22:33:44:55",
+                tcp_kiss_port=80,
+            )
+
+        assert "tcp_kiss_port" in str(exc.value)
+
+    def test_invalid_tcp_kiss_port_high(self) -> None:
+        """TCP KISS port above 65535 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError) as exc:
+            Configuration(
+                target_address="00:11:22:33:44:55",
+                tcp_kiss_port=70000,
+            )
+
+        assert "tcp_kiss_port" in str(exc.value)
+
+    def test_invalid_max_clients_low(self) -> None:
+        """TCP KISS max_clients below 1 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError) as exc:
+            Configuration(
+                target_address="00:11:22:33:44:55",
+                tcp_kiss_max_clients=0,
+            )
+
+        assert "tcp_kiss_max_clients" in str(exc.value)
+
+    def test_invalid_max_clients_high(self) -> None:
+        """TCP KISS max_clients above 20 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError) as exc:
+            Configuration(
+                target_address="00:11:22:33:44:55",
+                tcp_kiss_max_clients=50,
+            )
+
+        assert "tcp_kiss_max_clients" in str(exc.value)
+
+    def test_tcp_kiss_round_trip(self) -> None:
+        """TCP KISS config survives dict round-trip."""
+        original = Configuration(
+            target_address="00:11:22:33:44:55",
+            tcp_kiss_enabled=True,
+            tcp_kiss_port=9001,
+            tcp_kiss_host="192.168.1.1",
+            tcp_kiss_max_clients=3,
+        )
+
+        data = original.to_dict()
+        restored = Configuration.from_dict(data)
+
+        assert restored.tcp_kiss_enabled == original.tcp_kiss_enabled
+        assert restored.tcp_kiss_port == original.tcp_kiss_port
+        assert restored.tcp_kiss_host == original.tcp_kiss_host
+        assert restored.tcp_kiss_max_clients == original.tcp_kiss_max_clients

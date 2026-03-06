@@ -59,6 +59,36 @@
     </div>
 </div>
 
+<!-- TCP KISS Server -->
+{% if status.tcp_kiss.enabled %}
+<div class="connection-card tcp-kiss-card {{ 'listening' if status.tcp_kiss.listening else 'disconnected' }}" style="margin-top: 1rem;" id="tcp-kiss-card">
+    <h3>
+        TCP KISS Server
+        {% if status.tcp_kiss.listening %}
+        <span class="status-badge connected">Listening</span>
+        {% else %}
+        <span class="status-badge idle">Stopped</span>
+        {% endif %}
+    </h3>
+    <div class="connection-details">
+        <p><strong>Address:</strong> <code>{{ status.tcp_kiss.host }}:{{ status.tcp_kiss.port }}</code></p>
+        <p><strong>Clients:</strong> <span id="tcp-client-count">{{ status.tcp_kiss.client_count }}</span> / {{ status.tcp_kiss.max_clients }}</p>
+        {% if status.tcp_kiss.clients %}
+        <div id="tcp-client-list" style="margin-top: 0.5rem;">
+            {% for client in status.tcp_kiss.clients %}
+            <div class="tcp-client-entry" style="font-size: 0.8rem; padding: 0.25rem 0; border-top: 1px solid var(--border-color);">
+                <code>{{ client.remote_address }}</code>
+                <span class="text-muted" style="margin-left: 0.5rem;">RX {{ client.bytes_rx }}B / TX {{ client.bytes_tx }}B</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted" id="tcp-no-clients">No clients connected</p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
 <div class="card mt-2">
     <h3>Bridge Info</h3>
     <div class="status-row">
@@ -82,6 +112,9 @@
 {% if status.ble.state.value == 'connected' and status.classic.state.value == 'connected' %}
 <div class="alert alert-success mt-2">
     Bridge is active! Packets are being forwarded between phone and TNC.
+    {% if status.tcp_kiss.enabled and status.tcp_kiss.client_count > 0 %}
+    TCP KISS: {{ status.tcp_kiss.client_count }} client{{ 's' if status.tcp_kiss.client_count != 1 }} also receiving data.
+    {% endif %}
 </div>
 {% elif status.ble.state.value != 'connected' and status.classic.state.value != 'connected' %}
 <div class="alert alert-warning mt-2">
@@ -510,6 +543,64 @@ function updateStatusUI(status) {
     if (status.classic.state !== _lastClassicState) {
         _lastClassicState = status.classic.state;
         loadTNCHistory();
+    }
+
+    // Update TCP KISS card
+    var tcpCard = document.getElementById('tcp-kiss-card');
+    if (tcpCard && status.tcp_kiss) {
+        var tcpKiss = status.tcp_kiss;
+        // Update badge
+        var tcpBadge = tcpCard.querySelector('.status-badge');
+        if (tcpBadge) {
+            if (tcpKiss.listening) {
+                tcpBadge.className = 'status-badge connected';
+                tcpBadge.textContent = 'Listening';
+                tcpCard.className = 'connection-card tcp-kiss-card listening';
+            } else {
+                tcpBadge.className = 'status-badge idle';
+                tcpBadge.textContent = 'Stopped';
+                tcpCard.className = 'connection-card tcp-kiss-card disconnected';
+            }
+        }
+        // Update client count
+        var countEl = document.getElementById('tcp-client-count');
+        if (countEl) countEl.textContent = tcpKiss.client_count;
+        // Update client list
+        var listEl = document.getElementById('tcp-client-list');
+        var noClientsEl = document.getElementById('tcp-no-clients');
+        var detailsEl = tcpCard.querySelector('.connection-details');
+        if (detailsEl) {
+            if (tcpKiss.clients && tcpKiss.clients.length > 0) {
+                if (noClientsEl) noClientsEl.style.display = 'none';
+                var listHtml = '';
+                tcpKiss.clients.forEach(function(c) {
+                    listHtml += '<div class="tcp-client-entry" style="font-size: 0.8rem; padding: 0.25rem 0; border-top: 1px solid var(--border-color);">';
+                    listHtml += '<code>' + escapeHtml(c.remote_address) + '</code>';
+                    listHtml += ' <span class="text-muted" style="margin-left: 0.5rem;">RX ' + c.bytes_rx + 'B / TX ' + c.bytes_tx + 'B</span>';
+                    listHtml += '</div>';
+                });
+                if (listEl) {
+                    listEl.innerHTML = listHtml;
+                } else {
+                    var newListEl = document.createElement('div');
+                    newListEl.id = 'tcp-client-list';
+                    newListEl.style.marginTop = '0.5rem';
+                    newListEl.innerHTML = listHtml;
+                    detailsEl.appendChild(newListEl);
+                }
+            } else {
+                if (listEl) listEl.remove();
+                if (noClientsEl) {
+                    noClientsEl.style.display = '';
+                } else {
+                    var p = document.createElement('p');
+                    p.className = 'text-muted';
+                    p.id = 'tcp-no-clients';
+                    p.textContent = 'No clients connected';
+                    detailsEl.appendChild(p);
+                }
+            }
+        }
     }
 
     // Update uptime

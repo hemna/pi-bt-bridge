@@ -41,6 +41,19 @@
             <span class="status-badge {{ status.classic.state.value }}">{{ status.classic.state.value | title }}</span>
         </span>
     </div>
+    {% if status.tcp_kiss.enabled %}
+    <div class="status-row">
+        <span class="status-label">TCP KISS</span>
+        <span class="status-value">
+            {% if status.tcp_kiss.listening %}
+            <span class="status-badge connected">Listening</span>
+            <span class="text-muted" style="margin-left: 0.5rem;">:{{ status.tcp_kiss.port }} ({{ status.tcp_kiss.client_count }} client{{ 's' if status.tcp_kiss.client_count != 1 }})</span>
+            {% else %}
+            <span class="status-badge idle">Stopped</span>
+            {% endif %}
+        </span>
+    </div>
+    {% endif %}
     <div class="status-row">
         <span class="status-label">Uptime</span>
         <span class="status-value" id="uptime">{{ "%.0f"|format(status.uptime_seconds) }}s</span>
