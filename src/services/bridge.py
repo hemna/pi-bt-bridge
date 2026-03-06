@@ -171,7 +171,7 @@ class BridgeService:
         frames = self._state.ble_parser.feed(data)
 
         for frame in frames:
-            self._forward_to_classic(frame)
+            self._forward_to_classic(frame, source="BLE")
 
     # --- TCP KISS side ---
 
@@ -185,7 +185,13 @@ class BridgeService:
         frames = tcp_parser.feed(data)
 
         for frame in frames:
-            self._forward_to_classic(frame)
+            logger.debug(
+                "Received TCP KISS frame: %d bytes (port=%d cmd=%s)",
+                len(frame.data),
+                frame.port,
+                frame.command.name,
+            )
+            self._forward_to_classic(frame, source="TCP")
 
     # --- Classic (TNC) side: KISS or HDLC ---
 
@@ -244,10 +250,14 @@ class BridgeService:
 
     # --- Forwarding ---
 
-    def _forward_to_classic(self, frame: KISSFrame) -> None:
-        """Forward a KISS frame from BLE to the Classic connection.
+    def _forward_to_classic(self, frame: KISSFrame, source: str = "BLE") -> None:
+        """Forward a KISS frame to the Classic connection.
 
         If the TNC uses HDLC, translates the frame first.
+
+        Args:
+            frame: KISS frame to forward.
+            source: Origin of the frame ("BLE" or "TCP") for logging.
         """
         if not self._classic.is_connected:
             logger.warning("Cannot forward to Classic: not connected")
@@ -273,7 +283,8 @@ class BridgeService:
         self._state.frames_bridged += 1
 
         logger.debug(
-            "Bridged frame BLE->Classic [%s]: %d bytes (port=%d cmd=%s)",
+            "Bridged frame %s->Classic [%s]: %d bytes (port=%d cmd=%s)",
+            source,
             proto_label,
             len(frame.data),
             frame.port,
@@ -312,8 +323,17 @@ class BridgeService:
 
         self._state.frames_bridged += 1
 
+        # Build destination list for logging
+        destinations = []
+        if self._ble.is_connected:
+            destinations.append("BLE")
+        if self._tcp and self._tcp.client_count > 0:
+            destinations.append(f"TCP({self._tcp.client_count})")
+        dest_str = "+".join(destinations) if destinations else "none"
+
         logger.debug(
-            "Bridged frame Classic->clients [KISS]: %d bytes (port=%d cmd=%s)",
+            "Bridged frame Classic->%s [KISS]: %d bytes (port=%d cmd=%s)",
+            dest_str,
             len(frame.data),
             frame.port,
             frame.command.name,
