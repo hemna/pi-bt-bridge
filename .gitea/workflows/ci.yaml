@@ -20,29 +20,27 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python with uv
+      - name: Install uv and set up Python
         run: |
-          uv venv --python 3.11
-          echo "$PWD/.venv/bin" >> $GITHUB_PATH
-
-      - name: Install dependencies
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          
+      - name: Create venv and install dependencies
         run: |
-          uv pip install ruff pytest pytest-asyncio pytest-cov
+          $HOME/.local/bin/uv venv --python 3.11
+          $HOME/.local/bin/uv pip install ruff pytest pytest-asyncio pytest-cov
           # Install package in editable mode (skip system deps that won't work in CI)
-          uv pip install -e . --no-deps || true
+          $HOME/.local/bin/uv pip install -e . --no-deps || true
           # Install what we can for testing
-          uv pip install aiohttp aiohttp-jinja2 || true
+          $HOME/.local/bin/uv pip install aiohttp aiohttp-jinja2 || true
 
       - name: Run linter (ruff)
         run: |
-          ruff check src/ tests/ scripts/
+          .venv/bin/ruff check src/ tests/ scripts/
 
       - name: Run tests
         run: |
-          pytest tests/ -v --tb=short || echo "Tests completed (some may be skipped due to missing system dependencies)"
+          .venv/bin/pytest tests/ -v --tb=short || echo "Tests completed (some may be skipped due to missing system dependencies)"
 
   push-to-github:
     runs-on: ubuntu-latest
