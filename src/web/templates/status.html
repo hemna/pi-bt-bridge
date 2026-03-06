@@ -316,12 +316,52 @@ if (typeof EventSource !== 'undefined') {
     const evtSource = new EventSource('/api/status/stream');
 
     evtSource.addEventListener('status', function(event) {
-        location.reload();
+        try {
+            const status = JSON.parse(event.data);
+            updateStatusUI(status);
+        } catch (e) {
+            console.error('Failed to parse SSE status:', e);
+        }
     });
 
     evtSource.addEventListener('error', function(event) {
         console.log('SSE connection error, will retry...');
     });
+}
+
+/**
+ * Update the status page DOM from an SSE status event.
+ */
+function updateStatusUI(status) {
+    // Update BLE card
+    const bleCard = document.querySelector('.connection-card:nth-child(1)');
+    if (bleCard) {
+        const bleConnected = status.ble.state === 'connected';
+        bleCard.className = 'connection-card ' + (bleConnected ? 'connected' : 'disconnected');
+        const bleBadge = bleCard.querySelector('.status-badge');
+        if (bleBadge) {
+            bleBadge.className = 'status-badge ' + status.ble.state;
+            bleBadge.textContent = status.ble.state.charAt(0).toUpperCase() + status.ble.state.slice(1);
+        }
+    }
+
+    // Update Classic card
+    const classicCard = document.querySelector('.connection-card:nth-child(2)');
+    if (classicCard) {
+        const classicConnected = status.classic.state === 'connected';
+        classicCard.className = 'connection-card ' + (classicConnected ? 'connected' : 'disconnected');
+        const classicBadge = classicCard.querySelector('.status-badge');
+        if (classicBadge) {
+            classicBadge.className = 'status-badge ' + status.classic.state;
+            classicBadge.textContent = status.classic.state.charAt(0).toUpperCase() + status.classic.state.slice(1);
+        }
+    }
+
+    // Update uptime
+    const uptimeEl = document.getElementById('uptime');
+    if (uptimeEl && status.uptime_seconds != null) {
+        uptimeEl.textContent = status.uptime_seconds.toFixed(1) + 's';
+    }
 }
 
 // Update uptime every second

@@ -120,7 +120,14 @@ class BridgeService:
             return
 
         encoded = frame.encode()
-        asyncio.create_task(self._classic.send_data(encoded))
+
+        async def _send_with_error_handling() -> None:
+            try:
+                await self._classic.send_data(encoded)
+            except Exception:
+                logger.exception("Error sending data to Classic")
+
+        asyncio.create_task(_send_with_error_handling())
         self._state.frames_bridged += 1
 
         logger.debug(
@@ -135,7 +142,14 @@ class BridgeService:
             return
 
         encoded = frame.encode()
-        asyncio.create_task(self._ble.send_data(encoded))
+
+        async def _send_with_error_handling() -> None:
+            try:
+                await self._ble.send_data(encoded)
+            except Exception:
+                logger.exception("Error sending data to BLE")
+
+        asyncio.create_task(_send_with_error_handling())
         self._state.frames_bridged += 1
 
         logger.debug(

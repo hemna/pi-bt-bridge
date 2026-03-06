@@ -141,6 +141,40 @@ class ClassicService:
         self._connection.set_disconnected()
         self._update_state(ConnectionState.IDLE)
 
+    async def switch_target(self, address: str, rfcomm_channel: int | None = None) -> None:
+        """
+        Switch to a different target TNC device.
+
+        Disconnects from the current device (if connected), updates the
+        target address/channel, resets reconnect state, and initiates a
+        new connection — all without restarting the daemon.
+
+        Args:
+            address: New target device MAC address.
+            rfcomm_channel: RFCOMM channel (None keeps current channel).
+        """
+        old_target = self._target_address
+        logger.info(
+            "Switching target from %s to %s (channel %s)",
+            old_target,
+            address,
+            rfcomm_channel or self._rfcomm_channel,
+        )
+
+        # Stop current connection (cancel reconnect loop, close socket)
+        await self.stop()
+
+        # Update target
+        self._target_address = address
+        if rfcomm_channel is not None:
+            self._rfcomm_channel = rfcomm_channel
+
+        # Reset connection state for fresh start
+        self._connection = ClassicConnection(target_address=address)
+
+        # Restart connection to new target
+        await self.start()
+
     async def send_data(self, data: bytes) -> None:
         """
         Send data to connected TNC.
@@ -154,9 +188,15 @@ class ClassicService:
 
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._socket.send, data)
+            await asyncio.wait_for(
+                loop.run_in_executor(None, self._socket.send, data),
+                timeout=10.0,
+            )
             self._connection.record_tx(len(data))
             logger.debug("Sent %d bytes via SPP", len(data))
+        except TimeoutError:
+            logger.error("SPP write timed out")
+            await self._handle_disconnect("Write timed out")
         except OSError as e:
             logger.error("SPP write error: %s", e)
             await self._handle_disconnect(str(e))
@@ -177,7 +217,7 @@ class ClassicService:
                 )
                 sock.settimeout(10.0)  # 10 second connection timeout
                 sock.connect((self._target_address, self._rfcomm_channel))
-                sock.settimeout(None)  # Remove timeout after connection
+                sock.settimeout(5.0)  # 5 second timeout for send/recv
                 return sock
 
             logger.info(
@@ -325,10 +365,9 @@ class ClassicService:
         try:
             while self._running and self._socket is not None:
                 try:
-                    # Read with timeout using select or polling
                     data = await asyncio.wait_for(
                         loop.run_in_executor(None, self._socket.recv, 4096),
-                        timeout=1.0,
+                        timeout=10.0,
                     )
 
                     if not data:
@@ -343,6 +382,7 @@ class ClassicService:
                         self._on_data_received(data)
 
                 except TimeoutError:
+                    # Socket or asyncio timeout - just keep polling
                     continue
                 except OSError as e:
                     await self._handle_disconnect(str(e))

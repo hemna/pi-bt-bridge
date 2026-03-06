@@ -311,10 +311,17 @@ class BLEService:
         if not self._server:
             return
 
+        # Get the RX characteristic to set its value before notifying
+        rx_char = self._server.get_characteristic(NUS_RX_CHAR_UUID)
+        if rx_char is None:
+            logger.error("RX characteristic not found")
+            return
+
         # Fragment data to MTU size
         payload_size = self._connection.payload_size
         for i in range(0, len(data), payload_size):
             chunk = data[i : i + payload_size]
+            rx_char.value = bytearray(chunk)
             self._server.update_value(NUS_SERVICE_UUID, NUS_RX_CHAR_UUID)
             self._connection.record_tx(len(chunk))
 
@@ -337,6 +344,10 @@ class BLEService:
     ) -> None:
         """Handle GATT write request (data from iPhone)."""
         if characteristic.uuid.upper() == NUS_TX_CHAR_UUID.upper():
+            # Detect connection on first write if not already connected
+            if not self._connection.is_connected:
+                self.handle_connection("BLE-client", "iPhone")
+
             self._connection.record_rx(len(value))
             logger.debug("Received %d bytes via BLE", len(value))
 

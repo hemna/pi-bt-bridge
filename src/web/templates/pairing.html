@@ -192,7 +192,7 @@ async function submitPin(event) {
 }
 
 async function useDevice(address, name) {
-    if (!confirm(`Set ${name} (${address}) as the target TNC?\n\nThis will save the configuration and require a restart.`)) {
+    if (!confirm(`Set ${name} (${address}) as the target TNC?\n\nThe bridge will disconnect from the current TNC and connect to this one.`)) {
         return;
     }
     
@@ -205,10 +205,8 @@ async function useDevice(address, name) {
         const data = await response.json();
         
         if (response.ok) {
-            alert(data.message + '\n\nClick OK to restart the bridge.');
-            // Trigger restart
-            await fetch('/api/restart', { method: 'POST' });
-            setTimeout(() => location.reload(), 3000);
+            alert(data.message);
+            location.reload();
         } else {
             alert('Failed: ' + (data.error || 'Unknown error'));
         }

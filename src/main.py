@@ -82,6 +82,7 @@ async def run_daemon(config: Configuration) -> None:
             port=config.web_port,
             config=config,
             bridge_state=state,
+            classic_service=classic_service,
         )
 
     # Set up signal handlers for graceful shutdown

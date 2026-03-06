@@ -30,6 +30,7 @@ from src.web.models import (
 if TYPE_CHECKING:
     from src.config import Configuration
     from src.models.state import BridgeState
+    from src.services.classic_service import ClassicService
 
 logger = get_logger("web_service")
 
@@ -64,6 +65,7 @@ class WebService:
         port: int,
         config: Configuration,
         bridge_state: BridgeState | None = None,
+        classic_service: ClassicService | None = None,
     ) -> None:
         """
         Initialize the web service.
@@ -73,11 +75,13 @@ class WebService:
             port: Port number to listen on.
             config: Bridge configuration.
             bridge_state: Runtime bridge state for status display.
+            classic_service: Classic SPP service for live target switching.
         """
         self.host = host
         self.port = port
         self.config = config
         self.bridge_state = bridge_state
+        self._classic_service = classic_service
 
         # Runtime state
         self._app: web.Application | None = None
@@ -131,10 +135,12 @@ class WebService:
         # Create aiohttp application
         self._app = web.Application()
 
-        # Setup Jinja2 templates
+        # Setup Jinja2 templates (request_processor injects 'request' into
+        # every template context so base.html can use request.path for nav).
         aiohttp_jinja2.setup(
             self._app,
             loader=jinja2.FileSystemLoader(str(TEMPLATES_DIR)),
+            context_processors=[aiohttp_jinja2.request_processor],
         )
 
         # Register routes
@@ -479,8 +485,12 @@ class WebService:
         async def do_restart() -> None:
             await asyncio.sleep(1.0)  # Give time for response to be sent
             logger.info("Restarting daemon...")
-            # Send SIGTERM to ourselves to trigger graceful shutdown
+            # Send SIGTERM to trigger graceful shutdown; systemd will restart us
             os.kill(os.getpid(), signal.SIGTERM)
+            # If SIGTERM doesn't kill us (e.g. stuck child process), force exit
+            await asyncio.sleep(5.0)
+            logger.warning("SIGTERM did not exit, forcing exit")
+            os._exit(1)
 
         asyncio.create_task(do_restart())
 
@@ -864,12 +874,21 @@ class WebService:
         except OSError as e:
             logger.warning("Failed to update last_used in history: %s", e)
 
+        # Hot-swap: disconnect from old target and connect to new one
+        if self._classic_service is not None:
+            asyncio.create_task(
+                self._classic_service.switch_target(device.address, device.rfcomm_channel)
+            )
+            logger.info("Live-switching to TNC: %s (%s)", device.display_name, device.address)
+        else:
+            logger.warning("No classic service available, restart required for target change")
+
         logger.info("TNC selected: %s (%s)", device.display_name, device.address)
 
         return web.json_response(
             {
                 "success": True,
-                "message": "TNC selected as active target",
+                "message": "TNC selected, connecting...",
                 "device": self._device_to_response(device),
                 "connecting": True,
             }
@@ -942,12 +961,19 @@ class WebService:
         except (ValueError, OSError) as e:
             logger.warning("Failed to add device to TNC history: %s", e)
 
+        # Hot-swap: disconnect from old target and connect to new one
+        if self._classic_service is not None:
+            asyncio.create_task(
+                self._classic_service.switch_target(address, self.config.rfcomm_channel)
+            )
+            logger.info("Live-switching to TNC: %s (%s)", address, device_name or "Unknown")
+
         return web.json_response(
             {
                 "status": "saved",
-                "message": f"Target TNC set to {device_name or address}. Restart required.",
+                "message": f"Target TNC set to {device_name or address}. Connecting...",
                 "target_address": address,
                 "target_name": device_name,
-                "restart_required": True,
+                "restart_required": False,
             }
         )

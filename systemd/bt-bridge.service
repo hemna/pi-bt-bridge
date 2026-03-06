@@ -1,28 +1,26 @@
 [Unit]
 Description=Bluetooth LE to Classic Bridge Daemon
-Documentation=https://github.com/youruser/pi-bt-bridge
+Documentation=https://gitea.hemna.com/admin/pi-bt-bridge
 After=bluetooth.target
 Requires=bluetooth.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -m src.main
-WorkingDirectory=/opt/bt-bridge
-Restart=on-failure
+ExecStartPre=/usr/bin/bluetoothctl pairable on
+ExecStartPre=/usr/bin/bluetoothctl discoverable on
+ExecStart=/home/waboring/pi-bt-bridge/.venv/bin/python3 -m src.main
+WorkingDirectory=/home/waboring/pi-bt-bridge
+Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-ReadWritePaths=/var/run/bt-bridge.sock /etc/bt-bridge
-
-# Run as root for Bluetooth access (or create dedicated user with bluetooth group)
+# Run as root for Bluetooth access
 User=root
 Group=root
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
