@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from src.models.connection import TcpKissConnection
 from src.models.kiss import KISSCommand, KISSFrame, KISSParser
+from tests.conftest import make_mock_tcp_writer
 
 # =============================================================================
 # TcpKissConnection dataclass tests
@@ -121,8 +122,7 @@ class TestTcpKissServiceClientManagement:
 
         service = TcpKissService(port=0)
 
-        writer = AsyncMock()
-        writer.is_closing = MagicMock(return_value=False)
+        writer = make_mock_tcp_writer()
         service._add_client("192.168.1.1:5000", asyncio.StreamReader(), writer)
 
         assert service.client_count == 1
@@ -134,8 +134,7 @@ class TestTcpKissServiceClientManagement:
 
         service = TcpKissService(port=0)
 
-        writer = AsyncMock()
-        writer.is_closing = MagicMock(return_value=False)
+        writer = make_mock_tcp_writer()
         service._add_client("192.168.1.1:5000", asyncio.StreamReader(), writer)
         service._remove_client("192.168.1.1:5000")
 
@@ -157,8 +156,7 @@ class TestTcpKissServiceClientManagement:
         service = TcpKissService(port=0, max_clients=2)
 
         for i in range(2):
-            writer = AsyncMock()
-            writer.is_closing = MagicMock(return_value=False)
+            writer = make_mock_tcp_writer()
             service._add_client(f"client{i}:100{i}", asyncio.StreamReader(), writer)
 
         assert service.is_at_capacity
@@ -179,8 +177,7 @@ class TestTcpKissServiceClientManagement:
         )
         service = TcpKissService(port=0, bridge_state=state)
 
-        writer = AsyncMock()
-        writer.is_closing = MagicMock(return_value=False)
+        writer = make_mock_tcp_writer()
         service._add_client("192.168.1.1:5000", asyncio.StreamReader(), writer)
 
         assert len(state.tcp_clients) == 1
@@ -204,9 +201,7 @@ class TestTcpKissServiceDataSending:
 
         writers = []
         for i in range(3):
-            writer = AsyncMock()
-            writer.is_closing = MagicMock(return_value=False)
-            writer.drain = AsyncMock()
+            writer = make_mock_tcp_writer()
             writers.append(writer)
             service._add_client(f"client{i}:100{i}", asyncio.StreamReader(), writer)
 
@@ -223,9 +218,7 @@ class TestTcpKissServiceDataSending:
 
         service = TcpKissService(port=0)
 
-        writer = AsyncMock()
-        writer.is_closing = MagicMock(return_value=False)
-        writer.drain = AsyncMock()
+        writer = make_mock_tcp_writer()
         service._add_client("client:1000", asyncio.StreamReader(), writer)
 
         data = b"\xc0\x00hello\xc0"
@@ -248,12 +241,8 @@ class TestTcpKissServiceDataSending:
 
         service = TcpKissService(port=0)
 
-        good_writer = AsyncMock()
-        good_writer.is_closing = MagicMock(return_value=False)
-        good_writer.drain = AsyncMock()
-
-        closing_writer = AsyncMock()
-        closing_writer.is_closing = MagicMock(return_value=True)
+        good_writer = make_mock_tcp_writer()
+        closing_writer = make_mock_tcp_writer(is_closing=True)
 
         service._add_client("good:1000", asyncio.StreamReader(), good_writer)
         service._add_client("closing:2000", asyncio.StreamReader(), closing_writer)
@@ -287,8 +276,7 @@ class TestTcpKissServiceDataReceiving:
         service.set_data_callback(on_data)
 
         # Register a client first so _handle_client_data finds it
-        writer = AsyncMock()
-        writer.is_closing = MagicMock(return_value=False)
+        writer = make_mock_tcp_writer()
         service._add_client("client:1000", asyncio.StreamReader(), writer)
 
         # Simulate a client sending data
@@ -312,8 +300,7 @@ class TestTcpKissServiceDataReceiving:
         service.set_data_callback(callback)
 
         # Register a client first
-        writer = AsyncMock()
-        writer.is_closing = MagicMock(return_value=False)
+        writer = make_mock_tcp_writer()
         service._add_client("client:1000", asyncio.StreamReader(), writer)
 
         # Verify callback is stored (indirectly)
@@ -336,8 +323,7 @@ class TestTcpKissServiceBridgeState:
         from src.services.tcp_kiss_service import TcpKissService
 
         service = TcpKissService(port=0)
-        writer = AsyncMock()
-        writer.is_closing = MagicMock(return_value=False)
+        writer = make_mock_tcp_writer()
         service._add_client("client:1000", asyncio.StreamReader(), writer)
         service._remove_client("client:1000")
         # Should not raise
@@ -358,8 +344,7 @@ class TestTcpKissServiceBridgeState:
         )
         service = TcpKissService(port=0, bridge_state=state)
 
-        writer = AsyncMock()
-        writer.is_closing = MagicMock(return_value=False)
+        writer = make_mock_tcp_writer()
         service._add_client("192.168.1.1:5000", asyncio.StreamReader(), writer)
         assert len(state.tcp_clients) == 1
 

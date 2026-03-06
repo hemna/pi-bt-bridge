@@ -6,11 +6,12 @@ Tests CT-001 through CT-006 from specs/004-tcp-kiss-server/contracts/tcp-kiss-pr
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.models.kiss import FEND, FESC, TFEND, TFESC, KISSCommand, KISSFrame, KISSParser
+from tests.conftest import make_mock_tcp_writer
 
 # =============================================================================
 # CT-001: Frame Integrity
@@ -223,9 +224,7 @@ class TestMultiClientBroadcast:
         # Create mock writers for 3 clients
         writers = []
         for _i in range(3):
-            writer = AsyncMock()
-            writer.is_closing = MagicMock(return_value=False)
-            writer.drain = AsyncMock()
+            writer = make_mock_tcp_writer()
             writers.append(writer)
 
         # Register clients
@@ -247,12 +246,9 @@ class TestMultiClientBroadcast:
 
         service = TcpKissService(port=0)
 
-        good_writer = AsyncMock()
-        good_writer.is_closing = MagicMock(return_value=False)
-        good_writer.drain = AsyncMock()
+        good_writer = make_mock_tcp_writer()
 
-        bad_writer = AsyncMock()
-        bad_writer.is_closing = MagicMock(return_value=False)
+        bad_writer = make_mock_tcp_writer()
         bad_writer.drain = AsyncMock(side_effect=ConnectionResetError("broken"))
 
         service._add_client("good:1000", asyncio.StreamReader(), good_writer)
@@ -280,13 +276,8 @@ class TestClientIsolation:
 
         service = TcpKissService(port=0)
 
-        writer1 = AsyncMock()
-        writer1.is_closing = MagicMock(return_value=False)
-        writer1.drain = AsyncMock()
-
-        writer2 = AsyncMock()
-        writer2.is_closing = MagicMock(return_value=False)
-        writer2.drain = AsyncMock()
+        writer1 = make_mock_tcp_writer()
+        writer2 = make_mock_tcp_writer()
 
         service._add_client("client1:1000", asyncio.StreamReader(), writer1)
         service._add_client("client2:2000", asyncio.StreamReader(), writer2)
@@ -321,8 +312,7 @@ class TestConnectionLimit:
 
         # Add 2 clients (at limit)
         for i in range(2):
-            writer = AsyncMock()
-            writer.is_closing = MagicMock(return_value=False)
+            writer = make_mock_tcp_writer()
             service._add_client(f"client{i}:100{i}", asyncio.StreamReader(), writer)
 
         assert service.client_count == 2
@@ -335,8 +325,7 @@ class TestConnectionLimit:
 
         service = TcpKissService(port=0, max_clients=1)
 
-        writer1 = AsyncMock()
-        writer1.is_closing = MagicMock(return_value=False)
+        writer1 = make_mock_tcp_writer()
         service._add_client("client1:1000", asyncio.StreamReader(), writer1)
 
         assert service.is_at_capacity
