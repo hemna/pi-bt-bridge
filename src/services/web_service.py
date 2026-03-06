@@ -7,7 +7,7 @@ import json
 import os
 import re
 import signal
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -868,7 +868,7 @@ class WebService:
             )
 
         # Update last_used timestamp
-        device.last_used = datetime.now()
+        device.last_used = datetime.now(UTC)
         try:
             self._tnc_history.add(device)
         except OSError as e:
@@ -956,6 +956,7 @@ class WebService:
                     address=address,
                     bluetooth_name=device_name or "Unknown",
                     rfcomm_channel=self.config.rfcomm_channel,
+                    last_used=datetime.now(UTC),
                 )
             )
         except (ValueError, OSError) as e:

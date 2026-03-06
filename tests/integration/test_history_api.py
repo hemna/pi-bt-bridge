@@ -774,7 +774,7 @@ class TestTNCHistoryAPISelect:
         web_service._tnc_history.add(sample_device)
         web_service._check_device_paired = MagicMock(return_value=True)
 
-        before = datetime.now()
+        before = datetime.now(UTC)
         with patch.object(_ws_mod, "save_config"):
             request = _make_mock_request(match_info={"address": sample_device.address})
             await web_service._handle_api_tnc_history_select(request)

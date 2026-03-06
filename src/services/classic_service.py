@@ -169,8 +169,13 @@ class ClassicService:
         if rfcomm_channel is not None:
             self._rfcomm_channel = rfcomm_channel
 
-        # Reset connection state for fresh start
-        self._connection = ClassicConnection(target_address=address)
+        # Reset connection state in-place so BridgeState.classic stays
+        # pointed at the same object and status API reflects the new target.
+        self._connection.target_address = address
+        self._connection.bytes_rx = 0
+        self._connection.bytes_tx = 0
+        self._connection.reconnect_attempts = 0
+        self._connection.last_error = None
 
         # Restart connection to new target
         await self.start()

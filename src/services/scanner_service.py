@@ -351,6 +351,37 @@ class PairingManager:
             # Convert MAC to D-Bus path format
             device_path = f"/org/bluez/hci0/dev_{address.replace(':', '_')}"
 
+            # Verify the device object still exists in BlueZ.
+            # After a failed pairing attempt BlueZ may remove the object,
+            # so we check via ObjectManager first.
+            om = dbus.Interface(
+                self._bus.get_object(BLUEZ_SERVICE, "/"),
+                OBJECT_MANAGER_INTERFACE,
+            )
+            objects = om.GetManagedObjects()
+            if device_path not in objects:
+                logger.warning(
+                    "Device %s not found in BlueZ, running short scan to re-discover",
+                    address,
+                )
+                # Run a quick discovery to re-create the device object
+                adapter_obj = self._bus.get_object(BLUEZ_SERVICE, "/org/bluez/hci0")
+                adapter = dbus.Interface(adapter_obj, ADAPTER_INTERFACE)
+                try:
+                    adapter.StartDiscovery()
+                    await asyncio.sleep(5)
+                    adapter.StopDiscovery()
+                except Exception:
+                    pass
+
+                # Re-check
+                objects = om.GetManagedObjects()
+                if device_path not in objects:
+                    raise RuntimeError(
+                        f"Device {address} not found. It may be out of range or powered off. "
+                        "Try scanning again."
+                    )
+
             device_obj = self._bus.get_object(BLUEZ_SERVICE, device_path)
             device_iface = dbus.Interface(device_obj, DEVICE_INTERFACE)
             props_iface = dbus.Interface(device_obj, PROPERTIES_INTERFACE)

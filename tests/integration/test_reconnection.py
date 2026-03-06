@@ -151,6 +151,51 @@ class TestClassicReconnection:
         delay = conn.get_backoff_delay()
         assert delay == 8.0
 
+    @pytest.mark.asyncio
+    async def test_switch_target_preserves_connection_reference(self) -> None:
+        """
+        GIVEN: ClassicService with a connection object shared by BridgeState
+        WHEN: switch_target() is called to change TNC
+        THEN: The same connection object is updated in-place (not replaced)
+              so BridgeState.classic still reflects the new target
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from src.models.kiss import KISSParser
+        from src.models.state import BridgeState
+        from src.services.classic_service import ClassicService
+
+        old_address = "00:11:22:33:44:55"
+        new_address = "AA:BB:CC:DD:EE:FF"
+
+        classic_service = ClassicService(
+            target_address=old_address,
+            rfcomm_channel=2,
+        )
+        conn_ref = classic_service.connection
+
+        # Wire up BridgeState the same way main.py does
+        from src.models.connection import BLEConnection
+
+        state = BridgeState(
+            ble=BLEConnection(),
+            classic=conn_ref,
+            ble_parser=KISSParser(),
+            classic_parser=KISSParser(),
+        )
+
+        assert state.classic.target_address == old_address
+
+        # Patch _connect so it doesn't try real Bluetooth
+        with patch.object(classic_service, "_connect", new_callable=AsyncMock):
+            await classic_service.switch_target(new_address, rfcomm_channel=3)
+
+        # The connection reference must be the SAME object
+        assert classic_service.connection is conn_ref
+        # And BridgeState must see the new target
+        assert state.classic.target_address == new_address
+        assert state.classic is conn_ref
+
 
 class TestDataBuffering:
     """Integration tests for data buffering during link down (T052)."""
