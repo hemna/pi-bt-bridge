@@ -14,7 +14,9 @@ logger = logging.getLogger("bt-bridge.agent")
 # Agent constants
 AGENT_INTERFACE = "org.bluez.Agent1"
 AGENT_PATH = "/org/bluez/pi_bt_bridge/agent"
-CAPABILITY = "NoInputNoOutput"  # Auto-accept without user interaction
+# Use DisplayYesNo to handle numeric comparison pairing requests from iOS
+# NoInputNoOutput doesn't work because iOS requests MITM protection
+CAPABILITY = "DisplayYesNo"
 
 
 class PairingAgent:
@@ -66,8 +68,8 @@ class PairingAgent:
         """Run the agent main loop (called in background thread)."""
         try:
             import dbus
-            import dbus.service
             import dbus.mainloop.glib
+            import dbus.service
             from gi.repository import GLib
 
             # Set up D-Bus main loop
@@ -162,8 +164,12 @@ class PairingAgent:
 
             @dbus_module.service.method(AGENT_INTERFACE, in_signature="ou", out_signature="")
             def RequestConfirmation(self, device, passkey):
-                logger.info("RequestConfirmation: %s %d - auto-accepting", device, passkey)
-                return  # Empty return = accept
+                logger.info("=== RequestConfirmation called ===")
+                logger.info("Device: %s, Passkey: %06d", device, passkey)
+                logger.info("Auto-accepting pairing request...")
+                # Return without exception = accept
+                # This tells BlueZ to send User Confirmation Reply
+                return
 
             @dbus_module.service.method(AGENT_INTERFACE, in_signature="o", out_signature="")
             def RequestAuthorization(self, device):

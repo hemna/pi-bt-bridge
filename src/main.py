@@ -15,6 +15,7 @@ from src.services.ble_service import BLEService
 from src.services.bridge import BridgeService
 from src.services.classic_service import ClassicService
 from src.services.pairing_agent import PairingAgent
+from src.services.web_service import WebService
 from src.util.logging import get_logger, setup_logging
 
 logger = get_logger("main")
@@ -73,6 +74,16 @@ async def run_daemon(config: Configuration) -> None:
         state=state,
     )
 
+    # Create web service (if enabled)
+    web_service: WebService | None = None
+    if config.web_enabled:
+        web_service = WebService(
+            host=config.web_host,
+            port=config.web_port,
+            config=config,
+            bridge_state=state,
+        )
+
     # Set up signal handlers for graceful shutdown
     shutdown_event = asyncio.Event()
 
@@ -87,6 +98,11 @@ async def run_daemon(config: Configuration) -> None:
         # Start the bridge
         await bridge.start()
 
+        # Start web server (if enabled)
+        if web_service:
+            await web_service.start()
+            logger.info("Web interface available at http://%s:%d", config.web_host, config.web_port)
+
         logger.info("Daemon started successfully")
 
         # Wait for shutdown signal
@@ -95,6 +111,8 @@ async def run_daemon(config: Configuration) -> None:
     finally:
         # Graceful shutdown
         logger.info("Shutting down daemon")
+        if web_service:
+            await web_service.stop()
         await bridge.stop()
         pairing_agent.stop()
         logger.info("Daemon stopped")

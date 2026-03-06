@@ -7,5 +7,8 @@
   "log_file": "/var/log/bt-bridge.log",
   "buffer_size": 4096,
   "reconnect_max_delay": 30,
-  "status_socket": "/var/run/bt-bridge.sock"
+  "status_socket": "/var/run/bt-bridge.sock",
+  "web_enabled": true,
+  "web_port": 8080,
+  "web_host": "0.0.0.0"
 }

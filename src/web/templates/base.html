@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Pi BT Bridge{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <header>
+        <h1>Pi BT Bridge</h1>
+        <nav>
+            <a href="/" {% if request.path == "/" %}class="active"{% endif %}>Status</a>
+            <a href="/pairing" {% if request.path == "/pairing" %}class="active"{% endif %}>Pairing</a>
+            <a href="/settings" {% if request.path == "/settings" %}class="active"{% endif %}>Settings</a>
+            <a href="/stats" {% if request.path == "/stats" %}class="active"{% endif %}>Statistics</a>
+        </nav>
+    </header>
+    
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    
+    <footer>
+        <p>Pi BT Bridge v{{ status.version if status else "1.0.0" }}</p>
+    </footer>
+    
+    {% block scripts %}{% endblock %}
+</body>
+</html>

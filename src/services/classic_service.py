@@ -11,7 +11,6 @@ from typing import Final
 from src.models.connection import ClassicConnection
 from src.models.state import ConnectionState
 
-
 # SPP Service UUID
 SPP_SERVICE_UUID: Final[str] = "00001101-0000-1000-8000-00805F9B34FB"
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import subprocess
 from collections.abc import Callable
@@ -213,7 +212,7 @@ class BLEService:
         Also makes the Bluetooth adapter discoverable so iOS can see it in Settings.
         """
         try:
-            from bless import BlessServer, GATTCharacteristicProperties, GATTAttributePermissions
+            from bless import BlessServer, GATTAttributePermissions, GATTCharacteristicProperties
 
             logger.info("Starting BLE service", extra={"device_name": self._device_name})
 
