@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+import subprocess
 from collections.abc import Callable
 from typing import Final
 
@@ -141,6 +142,84 @@ class ClassicService:
         self._connection.set_disconnected()
         self._update_state(ConnectionState.IDLE)
 
+    async def switch_target(self, address: str, rfcomm_channel: int | None = None) -> None:
+        """
+        Switch to a different target TNC device.
+
+        Disconnects from the current device (if connected), updates the
+        target address/channel, resets reconnect state, and initiates a
+        new connection — all without restarting the daemon.
+
+        Args:
+            address: New target device MAC address.
+            rfcomm_channel: RFCOMM channel (None keeps current channel).
+        """
+        old_target = self._target_address
+        logger.info(
+            "Switching target from %s to %s (channel %s)",
+            old_target,
+            address,
+            rfcomm_channel or self._rfcomm_channel,
+        )
+
+        # Stop current connection (cancel reconnect loop, close socket)
+        await self.stop()
+
+        # Update target
+        self._target_address = address
+        if rfcomm_channel is not None:
+            self._rfcomm_channel = rfcomm_channel
+
+        # Reset connection state in-place so BridgeState.classic stays
+        # pointed at the same object and status API reflects the new target.
+        self._connection.target_address = address
+        self._connection.bytes_rx = 0
+        self._connection.bytes_tx = 0
+        self._connection.reconnect_attempts = 0
+        self._connection.last_error = None
+
+        # Restart connection to new target
+        await self.start()
+
+    async def reconnect_now(self) -> None:
+        """Force an immediate reconnection attempt.
+
+        Cancels any pending backoff timer, resets the reconnect counter,
+        and initiates a new connection right away.  No-op if already
+        connected.
+        """
+        if self.is_connected:
+            logger.info("Already connected, ignoring reconnect_now()")
+            return
+
+        logger.info("Manual reconnect requested for %s", self._target_address)
+
+        # Cancel any pending backoff sleep
+        if self._reconnect_task:
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
+            self._reconnect_task = None
+
+        # Close stale socket if any
+        if self._socket:
+            try:
+                self._socket.close()
+            except OSError:
+                pass
+            self._socket = None
+
+        # Reset backoff counter so we start fresh
+        self._connection.reconnect_attempts = 0
+        self._connection.last_error = None
+
+        # Make sure we're marked as running
+        self._running = True
+
+        await self._connect()
+
     async def send_data(self, data: bytes) -> None:
         """
         Send data to connected TNC.
@@ -154,16 +233,60 @@ class ClassicService:
 
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._socket.send, data)
+            await asyncio.wait_for(
+                loop.run_in_executor(None, self._socket.send, data),
+                timeout=10.0,
+            )
             self._connection.record_tx(len(data))
             logger.debug("Sent %d bytes via SPP", len(data))
+        except TimeoutError:
+            logger.error("SPP write timed out")
+            await self._handle_disconnect("Write timed out")
         except OSError as e:
             logger.error("SPP write error: %s", e)
             await self._handle_disconnect(str(e))
 
+    async def _bluez_disconnect(self) -> None:
+        """Disconnect from the target device at the BlueZ ACL level.
+
+        After a dirty RFCOMM disconnect (crash, timeout, radio power-off),
+        BlueZ may still hold a stale ACL connection.  The remote device
+        (e.g. VR-N7600) will refuse new RFCOMM connections until that
+        stale link is torn down.  Running ``bluetoothctl disconnect``
+        sends an HCI Disconnect and clears the state, allowing a fresh
+        RFCOMM connect to succeed without power-cycling the radio.
+
+        This is a best-effort operation -- failures are logged and ignored.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "bluetoothctl",
+                "disconnect",
+                self._target_address,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            output = (stdout or b"").decode().strip()
+            if output:
+                logger.debug("bluetoothctl disconnect: %s", output)
+        except TimeoutError:
+            logger.debug("bluetoothctl disconnect timed out (ignored)")
+        except OSError as e:
+            logger.debug("bluetoothctl disconnect failed: %s (ignored)", e)
+
+        # Brief pause to let the kernel finish tearing down the connection
+        await asyncio.sleep(0.5)
+
     async def _connect(self) -> None:
         """Initiate RFCOMM connection to target device."""
         self._update_state(ConnectionState.CONNECTING)
+
+        # Clear any stale BlueZ connection state before attempting RFCOMM.
+        # After a dirty disconnect, BlueZ may still think the device is
+        # connected at the ACL level, which prevents new RFCOMM connections.
+        # Running 'bluetoothctl disconnect' clears this stale state.
+        await self._bluez_disconnect()
 
         try:
             # Create RFCOMM socket
@@ -177,7 +300,7 @@ class ClassicService:
                 )
                 sock.settimeout(10.0)  # 10 second connection timeout
                 sock.connect((self._target_address, self._rfcomm_channel))
-                sock.settimeout(None)  # Remove timeout after connection
+                sock.settimeout(5.0)  # 5 second timeout for send/recv
                 return sock
 
             logger.info(
@@ -325,10 +448,9 @@ class ClassicService:
         try:
             while self._running and self._socket is not None:
                 try:
-                    # Read with timeout using select or polling
                     data = await asyncio.wait_for(
                         loop.run_in_executor(None, self._socket.recv, 4096),
-                        timeout=1.0,
+                        timeout=10.0,
                     )
 
                     if not data:
@@ -343,6 +465,7 @@ class ClassicService:
                         self._on_data_received(data)
 
                 except TimeoutError:
+                    # Socket or asyncio timeout - just keep polling
                     continue
                 except OSError as e:
                     await self._handle_disconnect(str(e))

@@ -471,7 +471,7 @@ Set a paired device as the target TNC.
 }
 ```
 
-This updates `target_address` in the configuration and saves to file.
+This updates `target_address` in the configuration and saves to file. The device is also automatically added to TNC history for quick switching later.
 
 **Error Response (400):**
 
@@ -479,6 +479,249 @@ This updates `target_address` in the configuration and saves to file.
 {
   "success": false,
   "message": "Address is required"
+}
+```
+
+---
+
+## TNC History APIs
+
+The TNC history API allows managing a list of previously paired TNC devices for quick switching without re-scanning.
+
+### GET /api/tnc-history
+
+List all TNC devices in history, sorted by most recently used first.
+
+**Response (200 OK):**
+
+```json
+{
+  "devices": [
+    {
+      "address": "00:1A:7D:DA:71:13",
+      "bluetooth_name": "TH-D74",
+      "friendly_name": "Mobile Rig",
+      "display_name": "Mobile Rig",
+      "rfcomm_channel": 2,
+      "last_used": "2026-03-06T10:30:00",
+      "added_at": "2026-03-01T14:00:00",
+      "is_current": true,
+      "is_paired": true
+    }
+  ],
+  "count": 1,
+  "current_address": "00:1A:7D:DA:71:13"
+}
+```
+
+**Fields:**
+
+| Field | Description |
+|-------|-------------|
+| `display_name` | `friendly_name` if set, otherwise `bluetooth_name` |
+| `is_current` | True if this device matches the current `target_address` |
+| `is_paired` | True if the device is currently Bluetooth paired |
+
+---
+
+### GET /api/tnc-history/{address}
+
+Get a single TNC device by MAC address.
+
+**Response (200 OK):**
+
+```json
+{
+  "address": "00:1A:7D:DA:71:13",
+  "bluetooth_name": "TH-D74",
+  "friendly_name": "Mobile Rig",
+  "display_name": "Mobile Rig",
+  "rfcomm_channel": 2,
+  "last_used": "2026-03-06T10:30:00",
+  "added_at": "2026-03-01T14:00:00",
+  "is_current": true,
+  "is_paired": true
+}
+```
+
+**Response (404 Not Found):**
+
+```json
+{
+  "success": false,
+  "message": "TNC not found in history",
+  "address": "00:1A:7D:DA:71:13"
+}
+```
+
+---
+
+### POST /api/tnc-history
+
+Add a TNC device to history (or update if it already exists).
+
+**Request Body:**
+
+```json
+{
+  "address": "00:1A:7D:DA:71:13",
+  "bluetooth_name": "TH-D74",
+  "friendly_name": "Mobile Rig",
+  "rfcomm_channel": 2
+}
+```
+
+| Field | Required | Validation |
+|-------|----------|------------|
+| `address` | Yes | Valid MAC format (XX:XX:XX:XX:XX:XX) |
+| `bluetooth_name` | Yes | Non-empty string |
+| `friendly_name` | No | 1-50 characters or null |
+| `rfcomm_channel` | Yes | Integer 1-30 |
+
+**Response (201 Created)** - New device:
+
+```json
+{
+  "success": true,
+  "message": "TNC added to history",
+  "device": { ... }
+}
+```
+
+**Response (200 OK)** - Updated existing:
+
+```json
+{
+  "success": true,
+  "message": "TNC updated in history",
+  "device": { ... }
+}
+```
+
+**Response (400 Bad Request):**
+
+```json
+{
+  "success": false,
+  "message": "Validation failed",
+  "errors": {
+    "address": "Invalid MAC address format",
+    "rfcomm_channel": "Must be 1-30"
+  }
+}
+```
+
+---
+
+### PUT /api/tnc-history/{address}
+
+Update a TNC device (friendly name or RFCOMM channel).
+
+**Request Body:**
+
+```json
+{
+  "friendly_name": "Base Station"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `friendly_name` | No | New name (1-50 chars), or `null` to clear |
+| `rfcomm_channel` | No | Updated RFCOMM channel (1-30) |
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "message": "TNC updated",
+  "device": { ... }
+}
+```
+
+**Response (404 Not Found):**
+
+```json
+{
+  "success": false,
+  "message": "TNC not found in history"
+}
+```
+
+---
+
+### DELETE /api/tnc-history/{address}
+
+Remove a TNC device from history.
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "message": "TNC removed from history"
+}
+```
+
+**Response (404 Not Found):**
+
+```json
+{
+  "success": false,
+  "message": "TNC not found in history"
+}
+```
+
+**Response (409 Conflict)** - Cannot remove current target:
+
+```json
+{
+  "success": false,
+  "message": "Cannot remove currently active TNC. Select a different TNC first."
+}
+```
+
+---
+
+### POST /api/tnc-history/{address}/select
+
+Select a TNC from history as the active target.
+
+**Behavior:**
+
+1. Updates `target_address` and `rfcomm_channel` in configuration
+2. Saves configuration to file
+3. Updates `last_used` timestamp in history
+4. Returns immediately (connection happens asynchronously)
+
+**Response (200 OK):**
+
+```json
+{
+  "success": true,
+  "message": "TNC selected as active target",
+  "device": { ... },
+  "connecting": true
+}
+```
+
+**Response (404 Not Found):**
+
+```json
+{
+  "success": false,
+  "message": "TNC not found in history"
+}
+```
+
+**Response (400 Bad Request)** - Not paired:
+
+```json
+{
+  "success": false,
+  "message": "TNC is not paired. Please pair the device first.",
+  "is_paired": false
 }
 ```
 
@@ -612,6 +855,40 @@ curl -X POST http://raspberrypi.local:8080/api/pairing/use \
 
 ```bash
 curl -X POST http://raspberrypi.local:8080/api/restart
+```
+
+**List TNC history:**
+
+```bash
+curl http://raspberrypi.local:8080/api/tnc-history
+```
+
+**Add TNC to history:**
+
+```bash
+curl -X POST http://raspberrypi.local:8080/api/tnc-history \
+  -H "Content-Type: application/json" \
+  -d '{"address": "00:1A:7D:DA:71:13", "bluetooth_name": "TH-D74", "rfcomm_channel": 2}'
+```
+
+**Update TNC friendly name:**
+
+```bash
+curl -X PUT http://raspberrypi.local:8080/api/tnc-history/00:1A:7D:DA:71:13 \
+  -H "Content-Type: application/json" \
+  -d '{"friendly_name": "Mobile Rig"}'
+```
+
+**Select TNC as active:**
+
+```bash
+curl -X POST http://raspberrypi.local:8080/api/tnc-history/00:1A:7D:DA:71:13/select
+```
+
+**Remove TNC from history:**
+
+```bash
+curl -X DELETE http://raspberrypi.local:8080/api/tnc-history/AA:BB:CC:DD:EE:FF
 ```
 
 ### Python Example

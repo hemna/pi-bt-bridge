@@ -7,7 +7,7 @@ import json
 import os
 import re
 import signal
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +16,7 @@ import jinja2
 from aiohttp import web
 
 from src.config import DEFAULT_CONFIG_PATH, ConfigurationError, save_config
+from src.models.tnc_history import TNCDevice, TNCHistory, TNCProtocol
 from src.services.scanner_service import get_pairing_manager
 from src.util.logging import get_logger
 from src.web.models import (
@@ -29,6 +30,8 @@ from src.web.models import (
 if TYPE_CHECKING:
     from src.config import Configuration
     from src.models.state import BridgeState
+    from src.services.bridge import BridgeService
+    from src.services.classic_service import ClassicService
 
 logger = get_logger("web_service")
 
@@ -63,6 +66,8 @@ class WebService:
         port: int,
         config: Configuration,
         bridge_state: BridgeState | None = None,
+        classic_service: ClassicService | None = None,
+        bridge_service: BridgeService | None = None,
     ) -> None:
         """
         Initialize the web service.
@@ -72,11 +77,15 @@ class WebService:
             port: Port number to listen on.
             config: Bridge configuration.
             bridge_state: Runtime bridge state for status display.
+            classic_service: Classic SPP service for live target switching.
+            bridge_service: Bridge service for protocol switching on TNC change.
         """
         self.host = host
         self.port = port
         self.config = config
         self.bridge_state = bridge_state
+        self._classic_service = classic_service
+        self._bridge_service = bridge_service
 
         # Runtime state
         self._app: web.Application | None = None
@@ -86,6 +95,9 @@ class WebService:
 
         # Pairing manager (lazy-loaded to avoid D-Bus issues on non-Linux)
         self._pairing_manager = None
+
+        # TNC history for quick switching between radios
+        self._tnc_history = TNCHistory(path=config.history_file)
 
         # SSE clients for real-time updates
         self._sse_clients: list[web.StreamResponse] = []
@@ -127,10 +139,12 @@ class WebService:
         # Create aiohttp application
         self._app = web.Application()
 
-        # Setup Jinja2 templates
+        # Setup Jinja2 templates (request_processor injects 'request' into
+        # every template context so base.html can use request.path for nav).
         aiohttp_jinja2.setup(
             self._app,
             loader=jinja2.FileSystemLoader(str(TEMPLATES_DIR)),
+            context_processors=[aiohttp_jinja2.request_processor],
         )
 
         # Register routes
@@ -194,6 +208,21 @@ class WebService:
         self._app.router.add_get("/api/pairing/status", self._handle_api_pairing_status)
         self._app.router.add_post("/api/pairing/use", self._handle_api_pairing_use)
 
+        # TNC History API
+        self._app.router.add_get("/api/tnc-history", self._handle_api_tnc_history_list)
+        self._app.router.add_post("/api/tnc-history", self._handle_api_tnc_history_add)
+        self._app.router.add_get("/api/tnc-history/{address}", self._handle_api_tnc_history_get)
+        self._app.router.add_put("/api/tnc-history/{address}", self._handle_api_tnc_history_update)
+        self._app.router.add_delete(
+            "/api/tnc-history/{address}", self._handle_api_tnc_history_delete
+        )
+        self._app.router.add_post(
+            "/api/tnc-history/{address}/select", self._handle_api_tnc_history_select
+        )
+        self._app.router.add_post(
+            "/api/tnc-history/{address}/connect", self._handle_api_tnc_history_connect
+        )
+
         # Static files
         self._app.router.add_static("/static", STATIC_DIR, name="static")
 
@@ -201,19 +230,22 @@ class WebService:
         """Get current bridge status."""
         # If we have bridge state, use it
         if self.bridge_state:
+            # Map src.models.state.ConnectionState -> src.web.models.ConnectionState
+            # by value string (both enums use the same string values)
+            ble_state = ConnectionState(self.bridge_state.ble.state.value)
             ble_status = BLEStatus(
-                state=ConnectionState.CONNECTED
-                if self.bridge_state.ble.is_connected
-                else ConnectionState.IDLE,
+                state=ble_state,
                 device_name=self.bridge_state.ble.device_name,
                 device_address=self.bridge_state.ble.device_address,
                 connected_at=self.bridge_state.ble.connected_at,
                 advertising=getattr(self.bridge_state.ble, "advertising", False),
             )
+            # Use actual connection state from the classic service
+            classic_state = ConnectionState(self.bridge_state.classic.state.value)
+            if self._classic_service is not None:
+                classic_state = ConnectionState(self._classic_service.connection.state.value)
             classic_status = ClassicStatus(
-                state=ConnectionState.CONNECTED
-                if self.bridge_state.classic.is_connected
-                else ConnectionState.IDLE,
+                state=classic_state,
                 target_address=self.bridge_state.classic.target_address,
                 target_name=getattr(self.bridge_state.classic, "device_name", None),
                 connected_at=self.bridge_state.classic.connected_at,
@@ -300,10 +332,11 @@ class WebService:
             status = self._get_bridge_status()
             await self._send_sse_event(response, "status", status.to_dict())
 
-            # Keep connection alive with periodic pings
+            # Push status updates every 3 seconds so the UI stays current
             while True:
-                await asyncio.sleep(30)
-                await self._send_sse_event(response, "ping", {"time": datetime.now().isoformat()})
+                await asyncio.sleep(3)
+                status = self._get_bridge_status()
+                await self._send_sse_event(response, "status", status.to_dict())
         except (ConnectionResetError, asyncio.CancelledError):
             pass
         finally:
@@ -463,8 +496,12 @@ class WebService:
         async def do_restart() -> None:
             await asyncio.sleep(1.0)  # Give time for response to be sent
             logger.info("Restarting daemon...")
-            # Send SIGTERM to ourselves to trigger graceful shutdown
+            # Send SIGTERM to trigger graceful shutdown; systemd will restart us
             os.kill(os.getpid(), signal.SIGTERM)
+            # If SIGTERM doesn't kill us (e.g. stuck child process), force exit
+            await asyncio.sleep(5.0)
+            logger.warning("SIGTERM did not exit, forcing exit")
+            os._exit(1)
 
         asyncio.create_task(do_restart())
 
@@ -596,6 +633,358 @@ class WebService:
                 status=500,
             )
 
+    # --- TNC History API Handlers ---
+
+    def _device_to_response(self, device: TNCDevice) -> dict[str, Any]:
+        """Convert TNCDevice to API response dict with runtime fields.
+
+        Adds is_current, is_paired, and connection_state fields that
+        depend on runtime state.
+
+        Args:
+            device: TNCDevice to convert.
+
+        Returns:
+            Dictionary suitable for JSON response.
+        """
+        data = device.to_dict()
+        data["display_name"] = device.display_name
+        is_current = device.address == self.config.target_address.upper()
+        data["is_current"] = is_current
+        # Check paired status via BlueZ (best-effort)
+        data["is_paired"] = self._check_device_paired(device.address)
+
+        # Include Classic connection state for the active TNC
+        if is_current and self._classic_service is not None:
+            conn = self._classic_service.connection
+            data["connection_state"] = conn.state.value
+            data["is_connected"] = self._classic_service.is_connected
+            data["last_error"] = conn.last_error
+            data["reconnect_attempts"] = conn.reconnect_attempts
+        else:
+            data["connection_state"] = None
+            data["is_connected"] = False
+            data["last_error"] = None
+            data["reconnect_attempts"] = 0
+
+        return data
+
+    def _check_device_paired(self, address: str) -> bool:
+        """Check if a device is paired at Bluetooth level.
+
+        Args:
+            address: MAC address to check.
+
+        Returns:
+            True if paired, False otherwise (or on error).
+        """
+        try:
+            pm = self._get_pairing_manager()
+            if pm and hasattr(pm, "scanner") and pm.scanner:
+                return pm.scanner.is_device_paired(address)
+        except Exception:
+            pass
+        # Default to True if we can't check (avoid false warnings)
+        return True
+
+    async def _handle_api_tnc_history_list(self, request: web.Request) -> web.Response:
+        """Handle GET /api/tnc-history - List all TNC devices in history."""
+        devices = self._tnc_history.list_all()
+        return web.json_response(
+            {
+                "devices": [self._device_to_response(d) for d in devices],
+                "count": len(devices),
+                "current_address": self.config.target_address,
+            }
+        )
+
+    async def _handle_api_tnc_history_get(self, request: web.Request) -> web.Response:
+        """Handle GET /api/tnc-history/{address} - Get single TNC device."""
+        address = request.match_info["address"]
+        device = self._tnc_history.get(address)
+
+        if device is None:
+            return web.json_response(
+                {"success": False, "message": "TNC not found in history", "address": address},
+                status=404,
+            )
+
+        return web.json_response(self._device_to_response(device))
+
+    async def _handle_api_tnc_history_add(self, request: web.Request) -> web.Response:
+        """Handle POST /api/tnc-history - Add TNC device to history."""
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response(
+                {"success": False, "message": "Invalid JSON"},
+                status=400,
+            )
+
+        # Validate required fields
+        errors: dict[str, str] = {}
+        address = data.get("address", "")
+        bluetooth_name = data.get("bluetooth_name", "")
+        rfcomm_channel = data.get("rfcomm_channel", 2)
+
+        if not address or not MAC_PATTERN.match(address):
+            errors["address"] = "Invalid MAC address format"
+        if not bluetooth_name:
+            errors["bluetooth_name"] = "bluetooth_name is required"
+        try:
+            rfcomm_channel = int(rfcomm_channel)
+            if not 1 <= rfcomm_channel <= 30:
+                errors["rfcomm_channel"] = "Must be 1-30"
+        except (TypeError, ValueError):
+            errors["rfcomm_channel"] = "Must be a number"
+
+        if errors:
+            return web.json_response(
+                {"success": False, "message": "Validation failed", "errors": errors},
+                status=400,
+            )
+
+        existing = self._tnc_history.get(address)
+        try:
+            device = TNCDevice(
+                address=address,
+                bluetooth_name=bluetooth_name,
+                friendly_name=data.get("friendly_name"),
+                rfcomm_channel=rfcomm_channel,
+            )
+            self._tnc_history.add(device)
+        except (ValueError, OSError) as e:
+            return web.json_response(
+                {"success": False, "message": str(e)},
+                status=400,
+            )
+
+        status_code = 200 if existing else 201
+        message = "TNC updated in history" if existing else "TNC added to history"
+        return web.json_response(
+            {"success": True, "message": message, "device": self._device_to_response(device)},
+            status=status_code,
+        )
+
+    async def _handle_api_tnc_history_update(self, request: web.Request) -> web.Response:
+        """Handle PUT /api/tnc-history/{address} - Update TNC device."""
+        address = request.match_info["address"]
+        device = self._tnc_history.get(address)
+
+        if device is None:
+            return web.json_response(
+                {"success": False, "message": "TNC not found in history"},
+                status=404,
+            )
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response(
+                {"success": False, "message": "Invalid JSON"},
+                status=400,
+            )
+
+        # Update allowed fields
+        if "friendly_name" in data:
+            friendly_name = data["friendly_name"]
+            if friendly_name is not None:
+                if not isinstance(friendly_name, str) or len(friendly_name) == 0:
+                    return web.json_response(
+                        {
+                            "success": False,
+                            "message": "friendly_name must be a non-empty string or null",
+                        },
+                        status=400,
+                    )
+                if len(friendly_name) > 50:
+                    return web.json_response(
+                        {
+                            "success": False,
+                            "message": "friendly_name must be 50 characters or less",
+                        },
+                        status=400,
+                    )
+            device.friendly_name = friendly_name
+
+        if "rfcomm_channel" in data:
+            try:
+                channel = int(data["rfcomm_channel"])
+                if not 1 <= channel <= 30:
+                    return web.json_response(
+                        {"success": False, "message": "rfcomm_channel must be 1-30"},
+                        status=400,
+                    )
+                device.rfcomm_channel = channel
+            except (TypeError, ValueError):
+                return web.json_response(
+                    {"success": False, "message": "rfcomm_channel must be a number"},
+                    status=400,
+                )
+
+        if "protocol" in data:
+            try:
+                device.protocol = TNCProtocol(data["protocol"])
+            except ValueError:
+                valid = ", ".join(p.value for p in TNCProtocol)
+                return web.json_response(
+                    {"success": False, "message": f"protocol must be one of: {valid}"},
+                    status=400,
+                )
+
+        try:
+            self._tnc_history.add(device)
+        except OSError as e:
+            return web.json_response(
+                {"success": False, "message": f"Failed to save: {e}"},
+                status=500,
+            )
+
+        return web.json_response(
+            {"success": True, "message": "TNC updated", "device": self._device_to_response(device)},
+        )
+
+    async def _handle_api_tnc_history_delete(self, request: web.Request) -> web.Response:
+        """Handle DELETE /api/tnc-history/{address} - Remove TNC from history."""
+        address = request.match_info["address"]
+
+        # Prevent deletion of currently active TNC
+        if address.upper() == self.config.target_address.upper():
+            return web.json_response(
+                {
+                    "success": False,
+                    "message": "Cannot remove currently active TNC. Select a different TNC first.",
+                },
+                status=409,
+            )
+
+        if not self._tnc_history.remove(address):
+            return web.json_response(
+                {"success": False, "message": "TNC not found in history"},
+                status=404,
+            )
+
+        return web.json_response(
+            {"success": True, "message": "TNC removed from history"},
+        )
+
+    async def _handle_api_tnc_history_select(self, request: web.Request) -> web.Response:
+        """Handle POST /api/tnc-history/{address}/select - Select TNC as active target."""
+        address = request.match_info["address"]
+        device = self._tnc_history.get(address)
+
+        if device is None:
+            return web.json_response(
+                {"success": False, "message": "TNC not found in history"},
+                status=404,
+            )
+
+        # Check if paired
+        if not self._check_device_paired(device.address):
+            return web.json_response(
+                {
+                    "success": False,
+                    "message": "TNC is not paired. Please pair the device first.",
+                    "is_paired": False,
+                },
+                status=400,
+            )
+
+        # Update config
+        self.config.target_address = device.address
+        self.config.rfcomm_channel = device.rfcomm_channel
+
+        # Save config
+        try:
+            config_path = os.environ.get("BT_BRIDGE_CONFIG", DEFAULT_CONFIG_PATH)
+            save_config(self.config, config_path)
+        except ConfigurationError as e:
+            return web.json_response(
+                {"success": False, "message": f"Failed to save configuration: {e}"},
+                status=500,
+            )
+
+        # Update last_used timestamp
+        device.last_used = datetime.now(UTC)
+        try:
+            self._tnc_history.add(device)
+        except OSError as e:
+            logger.warning("Failed to update last_used in history: %s", e)
+
+        # Hot-swap: disconnect from old target and connect to new one
+        if self._classic_service is not None:
+            asyncio.create_task(
+                self._classic_service.switch_target(device.address, device.rfcomm_channel)
+            )
+            logger.info("Live-switching to TNC: %s (%s)", device.display_name, device.address)
+        else:
+            logger.warning("No classic service available, restart required for target change")
+
+        # Update bridge protocol mode for the new TNC
+        if self._bridge_service is not None:
+            self._bridge_service.set_tnc_protocol(device.protocol)
+            logger.info("Bridge protocol set to %s for %s", device.protocol.value, device.address)
+
+        logger.info("TNC selected: %s (%s)", device.display_name, device.address)
+
+        return web.json_response(
+            {
+                "success": True,
+                "message": "TNC selected, connecting...",
+                "device": self._device_to_response(device),
+                "connecting": True,
+            }
+        )
+
+    async def _handle_api_tnc_history_connect(self, request: web.Request) -> web.Response:
+        """Handle POST /api/tnc-history/{address}/connect - Force immediate connection attempt.
+
+        Cancels any pending backoff timer and initiates a new connection
+        right away.  Only works for the currently active TNC.
+        """
+        address = request.match_info["address"]
+        device = self._tnc_history.get(address)
+
+        if device is None:
+            return web.json_response(
+                {"success": False, "message": "TNC not found in history"},
+                status=404,
+            )
+
+        # Only allow connecting to the currently active TNC
+        if address.upper() != self.config.target_address.upper():
+            return web.json_response(
+                {
+                    "success": False,
+                    "message": "Can only connect to the currently active TNC. Select it first.",
+                },
+                status=400,
+            )
+
+        if self._classic_service is None:
+            return web.json_response(
+                {"success": False, "message": "Classic service not available"},
+                status=503,
+            )
+
+        # Already connected?
+        if self._classic_service.is_connected:
+            return web.json_response(
+                {"success": True, "message": "Already connected", "already_connected": True}
+            )
+
+        # Force immediate reconnect
+        asyncio.create_task(self._classic_service.reconnect_now())
+        logger.info("Manual connect triggered for %s (%s)", device.display_name, device.address)
+
+        return web.json_response(
+            {
+                "success": True,
+                "message": "Connecting...",
+                "device": self._device_to_response(device),
+            }
+        )
+
     async def _handle_api_pairing_status(self, request: web.Request) -> web.Response:
         """Handle GET /api/pairing/status."""
         pm = self._get_pairing_manager()
@@ -651,12 +1040,32 @@ class WebService:
                 status=500,
             )
 
+        # Auto-add to TNC history
+        try:
+            self._tnc_history.add(
+                TNCDevice(
+                    address=address,
+                    bluetooth_name=device_name or "Unknown",
+                    rfcomm_channel=self.config.rfcomm_channel,
+                    last_used=datetime.now(UTC),
+                )
+            )
+        except (ValueError, OSError) as e:
+            logger.warning("Failed to add device to TNC history: %s", e)
+
+        # Hot-swap: disconnect from old target and connect to new one
+        if self._classic_service is not None:
+            asyncio.create_task(
+                self._classic_service.switch_target(address, self.config.rfcomm_channel)
+            )
+            logger.info("Live-switching to TNC: %s (%s)", address, device_name or "Unknown")
+
         return web.json_response(
             {
                 "status": "saved",
-                "message": f"Target TNC set to {device_name or address}. Restart required.",
+                "message": f"Target TNC set to {device_name or address}. Connecting...",
                 "target_address": address,
                 "target_name": device_name,
-                "restart_required": True,
+                "restart_required": False,
             }
         )

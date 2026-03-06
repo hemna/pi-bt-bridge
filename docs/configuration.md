@@ -37,6 +37,7 @@ BT_BRIDGE_CONFIG=/home/pi/my-config.json sudo python3 -m src.main
 | `web_enabled` | bool | `true` | true/false | Enable the web interface |
 | `web_port` | int | `8080` | 1024-65535 | HTTP port for web interface |
 | `web_host` | string | `"0.0.0.0"` | IP address or hostname | Host to bind web interface to |
+| `history_file` | string | `"/etc/bt-bridge/tnc-history.json"` | Valid file path | Path to TNC history JSON file |
 
 ## Option Details
 
@@ -132,6 +133,18 @@ IP address or hostname to bind the web interface to:
 | `"127.0.0.1"` | Listen only on localhost |
 | `"192.168.1.100"` | Listen on specific interface |
 
+### history_file
+
+Path to the JSON file where TNC device history is stored. This file is created automatically when the first TNC is added to history (either through the pairing flow or the TNC history API).
+
+The file persists across daemon restarts, allowing users to quickly switch between previously paired TNC devices without re-scanning.
+
+```json
+{
+  "history_file": "/etc/bt-bridge/tnc-history.json"
+}
+```
+
 ## Complete Example
 
 ```json
@@ -147,7 +160,8 @@ IP address or hostname to bind the web interface to:
   "status_socket": "/var/run/bt-bridge.sock",
   "web_enabled": true,
   "web_port": 8080,
-  "web_host": "0.0.0.0"
+  "web_host": "0.0.0.0",
+  "history_file": "/etc/bt-bridge/tnc-history.json"
 }
 ```
 

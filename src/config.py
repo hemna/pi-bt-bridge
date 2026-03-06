@@ -42,6 +42,7 @@ class Configuration:
         web_enabled: Enable web interface.
         web_port: HTTP port for web interface.
         web_host: Host to bind web interface to.
+        history_file: Path to TNC history JSON file.
     """
 
     target_address: str
@@ -56,6 +57,7 @@ class Configuration:
     web_enabled: bool = True
     web_port: int = 8080
     web_host: str = "0.0.0.0"
+    history_file: str = "/etc/bt-bridge/tnc-history.json"
 
     def __post_init__(self) -> None:
         """Validate configuration fields."""
@@ -136,6 +138,7 @@ class Configuration:
                 web_enabled=bool(data.get("web_enabled", True)),
                 web_port=int(data.get("web_port", 8080)),  # type: ignore[arg-type]
                 web_host=str(data.get("web_host", "0.0.0.0")),
+                history_file=str(data.get("history_file", "/etc/bt-bridge/tnc-history.json")),
             )
         except (TypeError, ValueError) as e:
             raise ConfigurationError(f"Invalid configuration data: {e}") from e

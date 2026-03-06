@@ -294,6 +294,11 @@ main {
     background-color: var(--bg-color);
 }
 
+.device-item.current {
+    border-left: 4px solid var(--success-color);
+    background-color: #f0fdf4;
+}
+
 .device-info {
     flex: 1;
 }
@@ -311,6 +316,11 @@ main {
 .device-rssi {
     font-size: 0.75rem;
     color: var(--text-muted);
+}
+
+.btn-sm {
+    font-size: 0.875rem;
+    padding: 0.25rem 0.75rem;
 }
 
 /* Stats */

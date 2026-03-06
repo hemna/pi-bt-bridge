@@ -41,10 +41,32 @@ The main dashboard showing the current state of the bridge.
 | **Classic Connection** | Shows TNC connection status, target device, RFCOMM channel, and connection time |
 | **Bridge Info** | Displays device name, uptime, start time, and version |
 | **Status Alerts** | Green alert when bridge is active (both sides connected), warning when disconnected |
+| **Known TNCs** | List of previously paired TNC radios with quick-switch, edit, and remove controls |
 
 **Real-time Updates:**
 
 The status page uses Server-Sent Events (SSE) to update automatically when connection states change. The uptime counter increments every second.
+
+**Known TNCs Section:**
+
+Displays a list of previously paired TNC devices. This list is populated automatically when you pair a new device from the Pairing page, and persists across daemon restarts.
+
+For each TNC device, you can:
+
+- **Select** - Switch the bridge to use this TNC as the active target (requires the device to be Bluetooth-paired)
+- **Edit** - Set a custom friendly name (e.g., "Base Station", "Mobile Rig") for easy identification
+- **Remove** - Remove the device from the history list (cannot remove the currently active TNC)
+
+Each device shows:
+
+| Detail | Description |
+|--------|-------------|
+| Display name | Friendly name if set, otherwise the Bluetooth device name |
+| MAC address | Bluetooth MAC address |
+| RFCOMM channel | The SPP channel number |
+| Last used | Relative timestamp (e.g., "2 hr ago") |
+| Active badge | Green badge if this is the currently connected TNC |
+| Not Paired badge | Red warning if the device is no longer Bluetooth-paired |
 
 ---
 

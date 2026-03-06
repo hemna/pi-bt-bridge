@@ -11,6 +11,7 @@ from src.config import DEFAULT_CONFIG_PATH, Configuration, ConfigurationError, l
 from src.models.connection import BLEConnection, ClassicConnection
 from src.models.kiss import KISSParser
 from src.models.state import BridgeState
+from src.models.tnc_history import TNCHistory, TNCProtocol
 from src.services.ble_service import BLEService
 from src.services.bridge import BridgeService
 from src.services.classic_service import ClassicService
@@ -67,11 +68,18 @@ async def run_daemon(config: Configuration) -> None:
         classic_parser=KISSParser(),
     )
 
+    # Look up TNC protocol from history (defaults to AUTO if not found)
+    tnc_history = TNCHistory(path=config.history_file)
+    tnc_device = tnc_history.get(config.target_address)
+    tnc_protocol = tnc_device.protocol if tnc_device else TNCProtocol.AUTO
+    logger.info("TNC protocol mode: %s", tnc_protocol.value)
+
     # Create bridge service
     bridge = BridgeService(
         ble_service=ble_service,
         classic_service=classic_service,
         state=state,
+        tnc_protocol=tnc_protocol,
     )
 
     # Create web service (if enabled)
@@ -82,6 +90,8 @@ async def run_daemon(config: Configuration) -> None:
             port=config.web_port,
             config=config,
             bridge_state=state,
+            classic_service=classic_service,
+            bridge_service=bridge,
         )
 
     # Set up signal handlers for graceful shutdown
