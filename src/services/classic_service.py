@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+import subprocess
 from collections.abc import Callable
 from typing import Final
 
@@ -245,9 +246,47 @@ class ClassicService:
             logger.error("SPP write error: %s", e)
             await self._handle_disconnect(str(e))
 
+    async def _bluez_disconnect(self) -> None:
+        """Disconnect from the target device at the BlueZ ACL level.
+
+        After a dirty RFCOMM disconnect (crash, timeout, radio power-off),
+        BlueZ may still hold a stale ACL connection.  The remote device
+        (e.g. VR-N7600) will refuse new RFCOMM connections until that
+        stale link is torn down.  Running ``bluetoothctl disconnect``
+        sends an HCI Disconnect and clears the state, allowing a fresh
+        RFCOMM connect to succeed without power-cycling the radio.
+
+        This is a best-effort operation -- failures are logged and ignored.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "bluetoothctl",
+                "disconnect",
+                self._target_address,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            output = (stdout or b"").decode().strip()
+            if output:
+                logger.debug("bluetoothctl disconnect: %s", output)
+        except TimeoutError:
+            logger.debug("bluetoothctl disconnect timed out (ignored)")
+        except OSError as e:
+            logger.debug("bluetoothctl disconnect failed: %s (ignored)", e)
+
+        # Brief pause to let the kernel finish tearing down the connection
+        await asyncio.sleep(0.5)
+
     async def _connect(self) -> None:
         """Initiate RFCOMM connection to target device."""
         self._update_state(ConnectionState.CONNECTING)
+
+        # Clear any stale BlueZ connection state before attempting RFCOMM.
+        # After a dirty disconnect, BlueZ may still think the device is
+        # connected at the ACL level, which prevents new RFCOMM connections.
+        # Running 'bluetoothctl disconnect' clears this stale state.
+        await self._bluez_disconnect()
 
         try:
             # Create RFCOMM socket
