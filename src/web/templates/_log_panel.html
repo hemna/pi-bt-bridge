@@ -1,0 +1,245 @@
+{# Reusable real-time log viewer panel. Include in any page template. #}
+{# Set log_panel_expanded = true before including to start expanded. #}
+
+<!-- Real-time Log Viewer -->
+<div class="log-panel{% if not log_panel_expanded %} collapsed{% endif %}" id="log-panel">
+    <div class="log-panel-header" onclick="toggleLogPanel()">
+        <h3>
+            <span class="log-panel-toggle">&#9660;</span>
+            Live Logs
+        </h3>
+    </div>
+    <div class="log-panel-body">
+        <div class="log-panel-controls">
+            <label for="log-level-filter">Level:</label>
+            <select id="log-level-filter" onchange="applyLogFilter()">
+                <option value="DEBUG">Debug</option>
+                <option value="INFO" selected>Info</option>
+                <option value="WARNING">Warning</option>
+                <option value="ERROR">Error</option>
+            </select>
+            <button class="btn btn-secondary" onclick="toggleLogPause()" id="log-pause-btn">Pause</button>
+            <button class="btn btn-secondary" onclick="clearLogs()">Clear</button>
+            <span class="log-count" id="log-count">0 entries</span>
+        </div>
+        <div class="log-viewer" id="log-viewer"></div>
+    </div>
+</div>
+
+<script>
+// =========================================================
+// Real-time Log Viewer
+// =========================================================
+
+// Provide escapeHtml if the host page hasn't defined it
+if (typeof escapeHtml === 'undefined') {
+    function escapeHtml(str) {
+        if (!str) return '';
+        var div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+}
+
+var _logEntries = [];
+var _logPaused = false;
+var _logMaxEntries = 500;
+var _logLevelOrder = { 'DEBUG': 0, 'INFO': 1, 'WARNING': 2, 'ERROR': 3, 'CRITICAL': 4 };
+
+/**
+ * Toggle the log panel open/collapsed.
+ */
+function toggleLogPanel() {
+    var panel = document.getElementById('log-panel');
+    panel.classList.toggle('collapsed');
+    // Start SSE connection on first open
+    if (!panel.classList.contains('collapsed') && !window._logSSE) {
+        startLogSSE();
+    }
+}
+
+/**
+ * Start the SSE connection for log streaming.
+ */
+function startLogSSE() {
+    if (typeof EventSource === 'undefined') return;
+
+    var logSource = new EventSource('/api/logs/stream');
+    window._logSSE = logSource;
+
+    // Receive initial history batch
+    logSource.addEventListener('log_history', function(event) {
+        try {
+            var data = JSON.parse(event.data);
+            if (data.entries && data.entries.length) {
+                data.entries.forEach(function(entry) {
+                    _logEntries.push(entry);
+                });
+                trimLogEntries();
+                renderLogs();
+            }
+        } catch (e) {
+            console.error('Failed to parse log_history:', e);
+        }
+    });
+
+    // Receive individual log entries
+    logSource.addEventListener('log', function(event) {
+        try {
+            var entry = JSON.parse(event.data);
+            _logEntries.push(entry);
+            trimLogEntries();
+            if (!_logPaused) {
+                appendLogEntry(entry);
+                updateLogCount();
+            }
+        } catch (e) {
+            console.error('Failed to parse log entry:', e);
+        }
+    });
+
+    logSource.addEventListener('error', function() {
+        console.log('Log SSE connection error, will retry...');
+    });
+}
+
+/**
+ * Trim the log entries array to max size.
+ */
+function trimLogEntries() {
+    while (_logEntries.length > _logMaxEntries) {
+        _logEntries.shift();
+    }
+}
+
+/**
+ * Get the minimum log level from the filter dropdown.
+ */
+function getMinLevel() {
+    var select = document.getElementById('log-level-filter');
+    return select ? select.value : 'INFO';
+}
+
+/**
+ * Check if a log entry passes the current level filter.
+ */
+function passesFilter(entry) {
+    var minLevel = getMinLevel();
+    var entryOrder = _logLevelOrder[entry.level] || 0;
+    var minOrder = _logLevelOrder[minLevel] || 0;
+    return entryOrder >= minOrder;
+}
+
+/**
+ * Format a log entry as an HTML element string.
+ */
+function formatLogEntry(entry) {
+    var levelClass = 'log-' + entry.level.toLowerCase();
+    var ts = '<span class="log-ts">' + escapeHtml(entry.timestamp) + '</span> ';
+    var level = '<span class="log-level">' + escapeHtml(entry.level) + '</span> ';
+    var name = '<span class="log-name">[' + escapeHtml(entry.logger) + ']</span> ';
+    var msg = escapeHtml(entry.message);
+    return '<div class="log-entry ' + levelClass + '">' + ts + level + name + msg + '</div>';
+}
+
+/**
+ * Render all log entries that pass the filter (full re-render).
+ */
+function renderLogs() {
+    var viewer = document.getElementById('log-viewer');
+    if (!viewer) return;
+
+    var html = '';
+    _logEntries.forEach(function(entry) {
+        if (passesFilter(entry)) {
+            html += formatLogEntry(entry);
+        }
+    });
+    viewer.innerHTML = html;
+    updateLogCount();
+    scrollToBottom();
+}
+
+/**
+ * Append a single log entry (if it passes the filter) without full re-render.
+ */
+function appendLogEntry(entry) {
+    if (!passesFilter(entry)) return;
+
+    var viewer = document.getElementById('log-viewer');
+    if (!viewer) return;
+
+    var wasAtBottom = viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 30;
+    viewer.insertAdjacentHTML('beforeend', formatLogEntry(entry));
+
+    // Trim DOM nodes if too many
+    while (viewer.children.length > _logMaxEntries) {
+        viewer.removeChild(viewer.firstChild);
+    }
+
+    if (wasAtBottom) {
+        scrollToBottom();
+    }
+}
+
+/**
+ * Scroll the log viewer to the bottom.
+ */
+function scrollToBottom() {
+    var viewer = document.getElementById('log-viewer');
+    if (viewer) {
+        viewer.scrollTop = viewer.scrollHeight;
+    }
+}
+
+/**
+ * Update the log entry count display.
+ */
+function updateLogCount() {
+    var countEl = document.getElementById('log-count');
+    if (!countEl) return;
+    var viewer = document.getElementById('log-viewer');
+    var visible = viewer ? viewer.children.length : 0;
+    countEl.textContent = visible + ' entries';
+}
+
+/**
+ * Apply the log level filter (re-renders all entries).
+ */
+function applyLogFilter() {
+    renderLogs();
+}
+
+/**
+ * Toggle pause/resume of log updates.
+ */
+function toggleLogPause() {
+    _logPaused = !_logPaused;
+    var btn = document.getElementById('log-pause-btn');
+    if (btn) {
+        btn.textContent = _logPaused ? 'Resume' : 'Pause';
+    }
+    // On resume, re-render to catch up
+    if (!_logPaused) {
+        renderLogs();
+    }
+}
+
+/**
+ * Clear all log entries from the viewer.
+ */
+function clearLogs() {
+    _logEntries = [];
+    var viewer = document.getElementById('log-viewer');
+    if (viewer) viewer.innerHTML = '';
+    updateLogCount();
+}
+
+// Auto-start if panel is already expanded on load
+document.addEventListener('DOMContentLoaded', function() {
+    var panel = document.getElementById('log-panel');
+    if (panel && !panel.classList.contains('collapsed')) {
+        startLogSSE();
+    }
+});
+</script>

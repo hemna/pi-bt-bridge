@@ -18,7 +18,7 @@ from aiohttp import web
 from src.config import DEFAULT_CONFIG_PATH, ConfigurationError, save_config
 from src.models.tnc_history import TNCDevice, TNCHistory, TNCProtocol
 from src.services.scanner_service import get_pairing_manager
-from src.util.logging import get_logger
+from src.util.logging import get_logger, get_sse_log_handler
 from src.web.models import (
     BLEStatus,
     BridgeStatus,
@@ -191,10 +191,13 @@ class WebService:
         self._app.router.add_get("/pairing", self._handle_pairing_page)
         self._app.router.add_get("/settings", self._handle_settings_page)
         self._app.router.add_get("/stats", self._handle_stats_page)
+        self._app.router.add_get("/logs", self._handle_logs_page)
 
         # API endpoints
         self._app.router.add_get("/api/status", self._handle_api_status)
         self._app.router.add_get("/api/status/stream", self._handle_api_status_stream)
+        self._app.router.add_get("/api/logs/stream", self._handle_api_logs_stream)
+        self._app.router.add_get("/api/logs/recent", self._handle_api_logs_recent)
         self._app.router.add_get("/api/stats", self._handle_api_stats)
         self._app.router.add_get("/api/settings", self._handle_api_settings_get)
         self._app.router.add_post("/api/settings", self._handle_api_settings_post)
@@ -298,6 +301,11 @@ class WebService:
             "status": self._get_bridge_status(),
         }
 
+    @aiohttp_jinja2.template("logs.html")
+    async def _handle_logs_page(self, request: web.Request) -> dict[str, Any]:
+        """Handle logs page request."""
+        return {}
+
     # --- API Handlers ---
 
     async def _handle_api_status(self, request: web.Request) -> web.Response:
@@ -355,6 +363,56 @@ class WebService:
         """Send an SSE event to a client."""
         message = f"event: {event}\ndata: {json.dumps(data)}\n\n"
         await response.write(message.encode("utf-8"))
+
+    async def _handle_api_logs_stream(self, request: web.Request) -> web.StreamResponse:
+        """Handle GET /api/logs/stream (SSE) - stream log entries in real time."""
+        handler = get_sse_log_handler()
+        if handler is None:
+            return web.Response(status=503, text="Log streaming not configured")
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+        await response.prepare(request)
+
+        # Send recent history as initial batch
+        recent = handler.get_recent(100)
+        if recent:
+            await self._send_sse_event(response, "log_history", {"entries": recent})
+
+        # Subscribe for real-time entries
+        queue = handler.subscribe()
+        try:
+            while True:
+                entry = await queue.get()
+                msg = f"event: log\ndata: {json.dumps(entry)}\n\n"
+                await response.write(msg.encode("utf-8"))
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        finally:
+            handler.unsubscribe(queue)
+
+        return response
+
+    async def _handle_api_logs_recent(self, request: web.Request) -> web.Response:
+        """Handle GET /api/logs/recent - return recent log entries as JSON."""
+        handler = get_sse_log_handler()
+        if handler is None:
+            return web.json_response({"entries": [], "error": "Log streaming not configured"})
+
+        count_str = request.query.get("count", "100")
+        try:
+            count = min(int(count_str), 500)
+        except ValueError:
+            count = 100
+
+        entries = handler.get_recent(count)
+        return web.json_response({"entries": entries, "count": len(entries)})
 
     async def broadcast_status_update(self) -> None:
         """Broadcast status update to all SSE clients."""

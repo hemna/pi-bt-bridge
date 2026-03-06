@@ -436,3 +436,158 @@ footer {
 .hidden {
     display: none;
 }
+
+/* Log viewer panel */
+.log-panel {
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    margin-top: 1rem;
+}
+
+.log-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.log-panel-header:hover {
+    background-color: var(--bg-color);
+    border-radius: 0.5rem 0.5rem 0 0;
+}
+
+.log-panel-header h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.log-panel-toggle {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    transition: transform 0.2s;
+}
+
+.log-panel.collapsed .log-panel-toggle {
+    transform: rotate(-90deg);
+}
+
+.log-panel.collapsed .log-panel-body {
+    display: none;
+}
+
+.log-panel.collapsed .log-panel-header {
+    border-bottom: none;
+}
+
+.log-panel-controls {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    flex-wrap: wrap;
+}
+
+.log-panel-controls select {
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.25rem;
+    font-size: 0.8rem;
+    background: var(--card-bg);
+}
+
+.log-panel-controls .btn {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+}
+
+.log-panel-controls label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.log-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
+.log-viewer {
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", Menlo, Monaco, "Courier New", monospace;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    padding: 0.5rem;
+    height: 300px;
+    overflow-y: auto;
+    overflow-x: auto;
+    border-radius: 0 0 0.5rem 0.5rem;
+    scroll-behavior: smooth;
+}
+
+.log-entry {
+    white-space: pre-wrap;
+    word-break: break-all;
+    padding: 1px 4px;
+    border-radius: 2px;
+}
+
+.log-entry:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.log-entry .log-ts {
+    color: #6c7086;
+}
+
+.log-entry .log-level {
+    font-weight: 600;
+    min-width: 7ch;
+    display: inline-block;
+}
+
+.log-entry .log-name {
+    color: #89b4fa;
+}
+
+.log-entry.log-debug .log-level {
+    color: #6c7086;
+}
+
+.log-entry.log-info .log-level {
+    color: #a6e3a1;
+}
+
+.log-entry.log-warning .log-level {
+    color: #f9e2af;
+}
+
+.log-entry.log-error .log-level {
+    color: #f38ba8;
+}
+
+.log-entry.log-critical .log-level {
+    color: #f38ba8;
+    text-decoration: underline;
+}
+
+/* Mobile: smaller log font, hide timestamp to save space */
+@media (max-width: 639px) {
+    .log-viewer {
+        font-size: 0.65rem;
+    }
+    .log-entry .log-ts {
+        display: none;
+    }
+    .log-entry .log-level {
+        min-width: 5ch;
+    }
+}
