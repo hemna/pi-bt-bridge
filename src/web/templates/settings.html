@@ -65,6 +65,48 @@
         </div>
     </div>
     
+    <div class="card">
+        <h3>TCP KISS Server</h3>
+        <p class="hint" style="margin-bottom: 1rem;">KISS-over-TCP server for apps like Direwolf, APRSIS32, Xastir, PinPoint APRS. Changes require restart.</p>
+        
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="tcp_kiss_enabled" name="tcp_kiss_enabled"
+                       {% if config.tcp_kiss_enabled %}checked{% endif %}
+                       style="width: auto; margin-right: 0.5rem;">
+                Enable TCP KISS Server
+            </label>
+        </div>
+        
+        <div id="tcp-kiss-settings">
+            <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                <div class="form-group" style="flex: 2; min-width: 200px;">
+                    <label for="tcp_kiss_host">Bind Address</label>
+                    <input type="text" id="tcp_kiss_host" name="tcp_kiss_host"
+                           value="{{ config.tcp_kiss_host }}"
+                           placeholder="0.0.0.0">
+                    <p class="hint">0.0.0.0 = all interfaces, 127.0.0.1 = localhost only</p>
+                </div>
+                
+                <div class="form-group" style="flex: 1; min-width: 120px;">
+                    <label for="tcp_kiss_port">Port</label>
+                    <input type="number" id="tcp_kiss_port" name="tcp_kiss_port"
+                           value="{{ config.tcp_kiss_port }}"
+                           min="1024" max="65535">
+                    <p class="hint">Default: 8001</p>
+                </div>
+                
+                <div class="form-group" style="flex: 1; min-width: 120px;">
+                    <label for="tcp_kiss_max_clients">Max Clients</label>
+                    <input type="number" id="tcp_kiss_max_clients" name="tcp_kiss_max_clients"
+                           value="{{ config.tcp_kiss_max_clients }}"
+                           min="1" max="20">
+                    <p class="hint">1-20</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <div class="mt-2">
         <button type="submit" class="btn btn-primary" id="save-btn">Save Settings</button>
         <button type="button" class="btn btn-danger" onclick="restartBridge()">Restart Bridge</button>
@@ -76,6 +118,17 @@
 
 {% block scripts %}
 <script>
+// Toggle TCP KISS settings visibility based on checkbox
+function updateTcpKissVisibility() {
+    var enabled = document.getElementById('tcp_kiss_enabled').checked;
+    var settings = document.getElementById('tcp-kiss-settings');
+    if (settings) {
+        settings.style.display = enabled ? '' : 'none';
+    }
+}
+document.getElementById('tcp_kiss_enabled').addEventListener('change', updateTcpKissVisibility);
+document.addEventListener('DOMContentLoaded', updateTcpKissVisibility);
+
 async function saveSettings(event) {
     event.preventDefault();
     
@@ -88,7 +141,11 @@ async function saveSettings(event) {
         target_address: form.target_address.value,
         rfcomm_channel: parseInt(form.rfcomm_channel.value),
         log_level: form.log_level.value,
-        web_port: parseInt(form.web_port.value)
+        web_port: parseInt(form.web_port.value),
+        tcp_kiss_enabled: form.tcp_kiss_enabled.checked,
+        tcp_kiss_host: form.tcp_kiss_host.value,
+        tcp_kiss_port: parseInt(form.tcp_kiss_port.value),
+        tcp_kiss_max_clients: parseInt(form.tcp_kiss_max_clients.value)
     };
     
     saveBtn.disabled = true;

@@ -43,6 +43,10 @@ class Configuration:
         web_port: HTTP port for web interface.
         web_host: Host to bind web interface to.
         history_file: Path to TNC history JSON file.
+        tcp_kiss_enabled: Enable TCP KISS server.
+        tcp_kiss_port: TCP port for KISS-over-TCP (default 8001).
+        tcp_kiss_host: Host to bind TCP KISS server to.
+        tcp_kiss_max_clients: Maximum simultaneous TCP KISS clients.
     """
 
     target_address: str
@@ -58,6 +62,10 @@ class Configuration:
     web_port: int = 8080
     web_host: str = "0.0.0.0"
     history_file: str = "/etc/bt-bridge/tnc-history.json"
+    tcp_kiss_enabled: bool = True
+    tcp_kiss_port: int = 8001
+    tcp_kiss_host: str = "0.0.0.0"
+    tcp_kiss_max_clients: int = 5
 
     def __post_init__(self) -> None:
         """Validate configuration fields."""
@@ -103,6 +111,14 @@ class Configuration:
         if not 1024 <= self.web_port <= 65535:
             errors.append(f"web_port must be 1024-65535, got: {self.web_port}")
 
+        # Validate tcp_kiss_port (1024-65535)
+        if not 1024 <= self.tcp_kiss_port <= 65535:
+            errors.append(f"tcp_kiss_port must be 1024-65535, got: {self.tcp_kiss_port}")
+
+        # Validate tcp_kiss_max_clients (1-20)
+        if not 1 <= self.tcp_kiss_max_clients <= 20:
+            errors.append(f"tcp_kiss_max_clients must be 1-20, got: {self.tcp_kiss_max_clients}")
+
         if errors:
             raise ConfigurationError("; ".join(errors))
 
@@ -139,6 +155,10 @@ class Configuration:
                 web_port=int(data.get("web_port", 8080)),  # type: ignore[arg-type]
                 web_host=str(data.get("web_host", "0.0.0.0")),
                 history_file=str(data.get("history_file", "/etc/bt-bridge/tnc-history.json")),
+                tcp_kiss_enabled=bool(data.get("tcp_kiss_enabled", True)),
+                tcp_kiss_port=int(data.get("tcp_kiss_port", 8001)),  # type: ignore[arg-type]
+                tcp_kiss_host=str(data.get("tcp_kiss_host", "0.0.0.0")),
+                tcp_kiss_max_clients=int(data.get("tcp_kiss_max_clients", 5)),  # type: ignore[arg-type]
             )
         except (TypeError, ValueError) as e:
             raise ConfigurationError(f"Invalid configuration data: {e}") from e

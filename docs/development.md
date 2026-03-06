@@ -49,11 +49,14 @@ pi-bt-bridge/
 │   ├── models/
 │   │   ├── state.py            # ConnectionState, BridgeState, ErrorEvent
 │   │   ├── kiss.py             # KISS protocol: KISSFrame, KISSParser
-│   │   └── connection.py       # BLEConnection, ClassicConnection
+│   │   ├── hdlc.py             # HDLC protocol translation layer
+│   │   ├── connection.py       # BLEConnection, ClassicConnection, TcpKissConnection
+│   │   └── tnc_history.py      # TNC device history (add/remove/switch)
 │   ├── services/
 │   │   ├── ble_service.py      # BLE GATT server (Nordic UART Service)
 │   │   ├── classic_service.py  # BT Classic SPP client
-│   │   ├── bridge.py           # Bidirectional frame bridging
+│   │   ├── bridge.py           # Multi-client frame bridging (BLE + TCP -> TNC)
+│   │   ├── tcp_kiss_service.py # TCP KISS server for desktop apps
 │   │   ├── pairing_agent.py    # D-Bus Bluetooth pairing agent
 │   │   ├── scanner_service.py  # Bluetooth device scanner
 │   │   └── web_service.py      # Web interface HTTP server
@@ -64,12 +67,17 @@ pi-bt-bridge/
 │   │   │   ├── status.html
 │   │   │   ├── pairing.html
 │   │   │   ├── settings.html
-│   │   │   └── stats.html
+│   │   │   ├── stats.html
+│   │   │   ├── logs.html
+│   │   │   └── _log_panel.html
 │   │   └── static/
 │   │       └── style.css       # Web interface styles
 │   └── util/
 │       └── logging.py          # Structured logging setup
 ├── tests/                      # Test suite
+│   ├── unit/                   # Unit tests (config, KISS, HDLC, TCP KISS, TNC history)
+│   ├── contract/               # Contract tests (BLE GATT, KISS framing, SPP, TCP KISS)
+│   └── integration/            # Integration tests (bridge flow, TCP bridge, history API)
 ├── systemd/                    # Systemd service files
 ├── scripts/                    # Utility scripts
 ├── docs/                       # Documentation

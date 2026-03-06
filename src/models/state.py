@@ -8,7 +8,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.models.connection import BLEConnection, ClassicConnection
+    from src.models.connection import BLEConnection, ClassicConnection, TcpKissConnection
     from src.models.kiss import KISSParser
 
 
@@ -101,6 +101,7 @@ class BridgeState:
         started_at: Daemon start time (UTC).
         frames_bridged: Total frames transferred in both directions.
         errors: Recent error events (capped at 100).
+        tcp_clients: Currently connected TCP KISS clients.
     """
 
     ble: BLEConnection
@@ -110,6 +111,7 @@ class BridgeState:
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     frames_bridged: int = 0
     errors: list[ErrorEvent] = field(default_factory=list)
+    tcp_clients: list[TcpKissConnection] = field(default_factory=list)
 
     MAX_ERRORS: int = field(default=100, repr=False)
 
@@ -154,4 +156,18 @@ class BridgeState:
             "uptime_seconds": self.uptime,
             "error_count": len(self.errors),
             "is_fully_connected": self.is_fully_connected,
+            "tcp_clients": {
+                "count": len(self.tcp_clients),
+                "clients": [
+                    {
+                        "remote_address": client.remote_address,
+                        "connected_at": (
+                            client.connected_at.isoformat() if client.connected_at else None
+                        ),
+                        "bytes_rx": client.bytes_rx,
+                        "bytes_tx": client.bytes_tx,
+                    }
+                    for client in self.tcp_clients
+                ],
+            },
         }

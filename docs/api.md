@@ -50,6 +50,28 @@ Get the current bridge status.
     "rfcomm_channel": 2,
     "connected_at": "2024-01-15T10:29:55Z"
   },
+  "tcp_kiss": {
+    "enabled": true,
+    "listening": true,
+    "port": 8001,
+    "host": "0.0.0.0",
+    "client_count": 2,
+    "max_clients": 5,
+    "clients": [
+      {
+        "remote_address": "192.168.1.50:49271",
+        "connected_at": "2024-01-15T10:31:00Z",
+        "bytes_rx": 1234,
+        "bytes_tx": 5678
+      },
+      {
+        "remote_address": "192.168.1.75:52340",
+        "connected_at": "2024-01-15T10:32:15Z",
+        "bytes_rx": 456,
+        "bytes_tx": 789
+      }
+    ]
+  },
   "uptime_seconds": 3600,
   "start_time": "2024-01-15T09:30:00Z",
   "version": "1.0.0"
@@ -152,7 +174,11 @@ Get current configuration.
   "status_socket": "/var/run/bt-bridge.sock",
   "web_enabled": true,
   "web_port": 8080,
-  "web_host": "0.0.0.0"
+  "web_host": "0.0.0.0",
+  "tcp_kiss_enabled": true,
+  "tcp_kiss_port": 8001,
+  "tcp_kiss_host": "0.0.0.0",
+  "tcp_kiss_max_clients": 5
 }
 ```
 
@@ -170,7 +196,10 @@ Only include fields you want to change:
 {
   "device_name": "MyBridge",
   "log_level": "DEBUG",
-  "web_port": 9000
+  "web_port": 9000,
+  "tcp_kiss_enabled": true,
+  "tcp_kiss_port": 8001,
+  "tcp_kiss_max_clients": 10
 }
 ```
 
@@ -207,6 +236,10 @@ Only include fields you want to change:
 | `buffer_size` | Integer 1024-65536 |
 | `reconnect_max_delay` | Integer 5-300 |
 | `web_port` | Integer 1024-65535 |
+| `tcp_kiss_enabled` | Boolean (true/false) |
+| `tcp_kiss_port` | Integer 1024-65535 |
+| `tcp_kiss_host` | Non-empty string |
+| `tcp_kiss_max_clients` | Integer 1-20 |
 
 ---
 

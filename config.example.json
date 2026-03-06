@@ -10,5 +10,10 @@
   "status_socket": "/var/run/bt-bridge.sock",
   "web_enabled": true,
   "web_port": 8080,
-  "web_host": "0.0.0.0"
+  "web_host": "0.0.0.0",
+  "history_file": "/etc/bt-bridge/tnc-history.json",
+  "tcp_kiss_enabled": true,
+  "tcp_kiss_port": 8001,
+  "tcp_kiss_host": "0.0.0.0",
+  "tcp_kiss_max_clients": 5
 }

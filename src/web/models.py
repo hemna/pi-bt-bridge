@@ -79,6 +79,7 @@ class BridgeStatus:
 
     ble: BLEStatus
     classic: ClassicStatus
+    tcp_kiss: TcpKissStatus
     started_at: datetime
     version: str = "1.0.0"
 
@@ -92,6 +93,7 @@ class BridgeStatus:
         return {
             "ble": self.ble.to_dict(),
             "classic": self.classic.to_dict(),
+            "tcp_kiss": self.tcp_kiss.to_dict(),
             "uptime_seconds": self.uptime_seconds,
             "started_at": self.started_at.isoformat(),
             "version": self.version,
@@ -197,3 +199,47 @@ class PairingSession:
         self.error_message = None
         self.discovered_devices = []
         self.started_at = None
+
+
+@dataclass
+class TcpKissClientStatus:
+    """Status of a single TCP KISS client for web display."""
+
+    remote_address: str
+    connected_at: str | None
+    bytes_rx: int
+    bytes_tx: int
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "remote_address": self.remote_address,
+            "connected_at": self.connected_at,
+            "bytes_rx": self.bytes_rx,
+            "bytes_tx": self.bytes_tx,
+        }
+
+
+@dataclass
+class TcpKissStatus:
+    """TCP KISS server status for web display."""
+
+    enabled: bool
+    listening: bool
+    port: int
+    host: str
+    client_count: int
+    max_clients: int
+    clients: list[TcpKissClientStatus]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "enabled": self.enabled,
+            "listening": self.listening,
+            "port": self.port,
+            "host": self.host,
+            "client_count": self.client_count,
+            "max_clients": self.max_clients,
+            "clients": [c.to_dict() for c in self.clients],
+        }

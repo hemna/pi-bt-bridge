@@ -5,6 +5,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-04
 ## Active Technologies
 - Python 3.11+ + aiohttp (web), dataclasses (models), JSON (persistence) (003-tnc-radio-history)
 - JSON file (`/etc/bt-bridge/tnc-history.json`) (003-tnc-radio-history)
+- Python 3.11+ (matches existing codebase) + asyncio (stdlib, TCP server), existing KISSParser for frame parsing (004-tcp-kiss-server)
+- N/A (no persistence needed; config via existing `config.json`) (004-tcp-kiss-server)
 
 - Python 3.11+ + bless (BLE GATT), dbus-python (SPP), PyGObject (GLib loop) (001-bt-bridge-daemon)
 
@@ -24,6 +26,7 @@ cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLO
 Python 3.11+: Follow standard conventions
 
 ## Recent Changes
+- 004-tcp-kiss-server: Added Python 3.11+ (matches existing codebase) + asyncio (stdlib, TCP server), existing KISSParser for frame parsing
 - 003-tnc-radio-history: Added Python 3.11+ + aiohttp (web), dataclasses (models), JSON (persistence)
 
 - 001-bt-bridge-daemon: Added Python 3.11+ + bless (BLE GATT), dbus-python (SPP), PyGObject (GLib loop)

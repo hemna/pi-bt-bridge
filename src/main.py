@@ -16,6 +16,7 @@ from src.services.ble_service import BLEService
 from src.services.bridge import BridgeService
 from src.services.classic_service import ClassicService
 from src.services.pairing_agent import PairingAgent
+from src.services.tcp_kiss_service import TcpKissService
 from src.services.web_service import WebService
 from src.util.logging import get_logger, setup_logging
 
@@ -74,12 +75,31 @@ async def run_daemon(config: Configuration) -> None:
     tnc_protocol = tnc_device.protocol if tnc_device else TNCProtocol.AUTO
     logger.info("TNC protocol mode: %s", tnc_protocol.value)
 
+    # Create TCP KISS service (if enabled)
+    tcp_kiss_service: TcpKissService | None = None
+    if config.tcp_kiss_enabled:
+        tcp_kiss_service = TcpKissService(
+            host=config.tcp_kiss_host,
+            port=config.tcp_kiss_port,
+            max_clients=config.tcp_kiss_max_clients,
+            bridge_state=state,
+        )
+        logger.info(
+            "TCP KISS server will listen on %s:%d (max %d clients)",
+            config.tcp_kiss_host,
+            config.tcp_kiss_port,
+            config.tcp_kiss_max_clients,
+        )
+    else:
+        logger.info("TCP KISS server disabled by configuration")
+
     # Create bridge service
     bridge = BridgeService(
         ble_service=ble_service,
         classic_service=classic_service,
         state=state,
         tnc_protocol=tnc_protocol,
+        tcp_service=tcp_kiss_service,
     )
 
     # Create web service (if enabled)

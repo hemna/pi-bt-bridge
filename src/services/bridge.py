@@ -2,13 +2,15 @@
 
 Supports TNCs that use standard KISS framing (0xC0) as well as
 radios that use HDLC-style framing (0x7E), with automatic protocol
-detection.
+detection.  Fans out received TNC frames to all connected clients
+(BLE and TCP KISS).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from src.models.hdlc import HDLCFrame, HDLCParser, detect_protocol
 from src.models.kiss import KISSFrame, KISSParser
@@ -16,6 +18,9 @@ from src.models.state import BridgeState
 from src.models.tnc_history import TNCProtocol
 from src.services.ble_service import BLEService
 from src.services.classic_service import ClassicService
+
+if TYPE_CHECKING:
+    from src.services.tcp_kiss_service import TcpKissService
 
 logger = logging.getLogger("bt-bridge.bridge")
 
@@ -38,6 +43,7 @@ class BridgeService:
         classic_service: ClassicService,
         state: BridgeState | None = None,
         tnc_protocol: TNCProtocol = TNCProtocol.AUTO,
+        tcp_service: TcpKissService | None = None,
     ) -> None:
         """
         Initialize bridge service.
@@ -47,9 +53,11 @@ class BridgeService:
             classic_service: Classic SPP service.
             state: Bridge state container.
             tnc_protocol: Protocol the TNC uses (KISS, HDLC, or AUTO).
+            tcp_service: Optional TCP KISS server for desktop clients.
         """
         self._ble = ble_service
         self._classic = classic_service
+        self._tcp = tcp_service
 
         # Create state if not provided
         if state is None:
@@ -78,6 +86,10 @@ class BridgeService:
         self._ble.set_data_callback(self._handle_ble_data)
         self._classic.set_data_callback(self._handle_classic_data)
 
+        # Register TCP KISS callback if service is available
+        if self._tcp:
+            self._tcp.set_data_callback(self._handle_tcp_data)
+
     @property
     def state(self) -> BridgeState:
         """Get bridge state."""
@@ -92,6 +104,11 @@ class BridgeService:
     def is_fully_connected(self) -> bool:
         """Check if both connections are active."""
         return self._state.is_fully_connected
+
+    @property
+    def tcp_service(self) -> TcpKissService | None:
+        """Get the TCP KISS service if available."""
+        return self._tcp
 
     def set_tnc_protocol(self, protocol: TNCProtocol) -> None:
         """Change the TNC protocol mode.
@@ -113,11 +130,16 @@ class BridgeService:
         logger.info("Starting bridge service (TNC protocol: %s)", self._tnc_protocol.value)
         self._running = True
 
-        # Start both services
+        # Start both BLE and Classic services
         await asyncio.gather(
             self._ble.start(),
             self._classic.start(),
         )
+
+        # Start TCP KISS server if available
+        if self._tcp:
+            await self._tcp.start()
+            logger.info("TCP KISS server started on port %d", self._tcp.port)
 
         logger.info("Bridge service started")
 
@@ -126,7 +148,11 @@ class BridgeService:
         logger.info("Stopping bridge service")
         self._running = False
 
-        # Stop both services
+        # Stop TCP KISS server first (clients should disconnect cleanly)
+        if self._tcp:
+            await self._tcp.stop()
+
+        # Stop BLE and Classic services
         await asyncio.gather(
             self._ble.stop(),
             self._classic.stop(),
@@ -145,7 +171,27 @@ class BridgeService:
         frames = self._state.ble_parser.feed(data)
 
         for frame in frames:
-            self._forward_to_classic(frame)
+            self._forward_to_classic(frame, source="BLE")
+
+    # --- TCP KISS side ---
+
+    def _handle_tcp_data(self, data: bytes) -> None:
+        """Handle data received from a TCP KISS client (TCP -> TNC).
+
+        TCP clients send KISS frames. If the TNC expects HDLC
+        framing, we translate before forwarding.
+        """
+        tcp_parser = KISSParser()
+        frames = tcp_parser.feed(data)
+
+        for frame in frames:
+            logger.debug(
+                "Received TCP KISS frame: %d bytes (port=%d cmd=%s)",
+                len(frame.data),
+                frame.port,
+                frame.command.name,
+            )
+            self._forward_to_classic(frame, source="TCP")
 
     # --- Classic (TNC) side: KISS or HDLC ---
 
@@ -190,24 +236,28 @@ class BridgeService:
             self._handle_classic_kiss(data)
 
     def _handle_classic_kiss(self, data: bytes) -> None:
-        """Parse Classic data as KISS and forward to BLE."""
+        """Parse Classic data as KISS and forward to all clients."""
         frames = self._state.classic_parser.feed(data)
         for frame in frames:
-            self._forward_to_ble_kiss(frame)
+            self._forward_to_clients(frame)
 
     def _handle_classic_hdlc(self, data: bytes) -> None:
-        """Parse Classic data as HDLC and forward to BLE as KISS."""
+        """Parse Classic data as HDLC and forward to all clients as KISS."""
         hdlc_frames = self._hdlc_parser.feed(data)
         for hdlc_frame in hdlc_frames:
             kiss_frame = hdlc_frame.to_kiss_frame()
-            self._forward_to_ble_kiss(kiss_frame)
+            self._forward_to_clients(kiss_frame)
 
     # --- Forwarding ---
 
-    def _forward_to_classic(self, frame: KISSFrame) -> None:
-        """Forward a KISS frame from BLE to the Classic connection.
+    def _forward_to_classic(self, frame: KISSFrame, source: str = "BLE") -> None:
+        """Forward a KISS frame to the Classic connection.
 
         If the TNC uses HDLC, translates the frame first.
+
+        Args:
+            frame: KISS frame to forward.
+            source: Origin of the frame ("BLE" or "TCP") for logging.
         """
         if not self._classic.is_connected:
             logger.warning("Cannot forward to Classic: not connected")
@@ -233,32 +283,57 @@ class BridgeService:
         self._state.frames_bridged += 1
 
         logger.debug(
-            "Bridged frame BLE->Classic [%s]: %d bytes (port=%d cmd=%s)",
+            "Bridged frame %s->Classic [%s]: %d bytes (port=%d cmd=%s)",
+            source,
             proto_label,
             len(frame.data),
             frame.port,
             frame.command.name,
         )
 
-    def _forward_to_ble_kiss(self, frame: KISSFrame) -> None:
-        """Forward a KISS frame to the BLE connection (always KISS)."""
-        if not self._ble.is_connected:
-            logger.warning("Cannot forward to BLE: not connected")
-            return
+    def _forward_to_clients(self, frame: KISSFrame) -> None:
+        """Forward a KISS frame to all clients (BLE and TCP).
 
+        Sends to BLE if connected, and broadcasts to all TCP clients.
+        Errors on one destination do not affect others.
+        """
         encoded = frame.encode()
 
-        async def _send_with_error_handling() -> None:
-            try:
-                await self._ble.send_data(encoded)
-            except Exception:
-                logger.exception("Error sending data to BLE")
+        # Forward to BLE client
+        if self._ble.is_connected:
 
-        asyncio.create_task(_send_with_error_handling())
+            async def _send_ble() -> None:
+                try:
+                    await self._ble.send_data(encoded)
+                except Exception:
+                    logger.exception("Error sending data to BLE")
+
+            asyncio.create_task(_send_ble())
+
+        # Broadcast to all TCP KISS clients
+        if self._tcp and self._tcp.client_count > 0:
+
+            async def _send_tcp() -> None:
+                try:
+                    await self._tcp.broadcast(encoded)  # type: ignore[union-attr]
+                except Exception:
+                    logger.exception("Error broadcasting to TCP clients")
+
+            asyncio.create_task(_send_tcp())
+
         self._state.frames_bridged += 1
 
+        # Build destination list for logging
+        destinations = []
+        if self._ble.is_connected:
+            destinations.append("BLE")
+        if self._tcp and self._tcp.client_count > 0:
+            destinations.append(f"TCP({self._tcp.client_count})")
+        dest_str = "+".join(destinations) if destinations else "none"
+
         logger.debug(
-            "Bridged frame Classic->BLE [KISS]: %d bytes (port=%d cmd=%s)",
+            "Bridged frame Classic->%s [KISS]: %d bytes (port=%d cmd=%s)",
+            dest_str,
             len(frame.data),
             frame.port,
             frame.command.name,

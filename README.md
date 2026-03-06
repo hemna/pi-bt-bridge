@@ -1,25 +1,35 @@
 # Pi BT Bridge
 
-A Bluetooth LE to Bluetooth Classic bridge daemon for Raspberry Pi Zero 2 W, designed to connect iOS ham radio apps to Bluetooth Classic TNC devices.
+A Bluetooth LE to Bluetooth Classic bridge daemon for Raspberry Pi Zero 2 W, designed to connect iOS ham radio apps and desktop APRS software to Bluetooth Classic TNC devices.
 
 ## Overview
 
-Many ham radio TNC (Terminal Node Controller) devices use Bluetooth Classic Serial Port Profile (SPP) for connectivity. However, iOS devices only support Bluetooth Low Energy (BLE), not Bluetooth Classic. This daemon bridges the gap by:
+Many ham radio TNC (Terminal Node Controller) devices use Bluetooth Classic Serial Port Profile (SPP) for connectivity. However, iOS devices only support Bluetooth Low Energy (BLE), not Bluetooth Classic, and desktop APRS apps need a network KISS TNC. This daemon bridges the gap by:
 
 1. Advertising a BLE GATT service (Nordic UART Service) that iOS apps can connect to
-2. Connecting to your TNC device over Bluetooth Classic SPP
-3. Transparently forwarding KISS protocol frames bidirectionally
+2. Serving a TCP KISS port that desktop apps (Direwolf, APRSIS32, Xastir, PinPoint APRS) can connect to
+3. Connecting to your TNC device over Bluetooth Classic SPP
+4. Transparently forwarding KISS protocol frames between all connected clients and the TNC
 
 ```
 ┌─────────┐      BLE/NUS      ┌──────────────┐    BT Classic/SPP    ┌─────────┐
-│  iPhone │ ◄───────────────► │  Raspberry   │ ◄─────────────────► │   TNC   │
-│   App   │                   │   Pi Zero    │                      │ Device  │
-└─────────┘                   └──────────────┘                      └─────────┘
+│  iPhone │ ◄───────────────► │              │ ◄─────────────────► │         │
+│   App   │                   │  Raspberry   │                      │   TNC   │
+└─────────┘                   │   Pi Zero    │                      │ Device  │
+┌─────────┐    TCP KISS       │              │                      │         │
+│ Desktop │ ◄───────────────► │              │                      │         │
+│  Apps   │   (port 8001)     └──────────────┘                      └─────────┘
+└─────────┘
 ```
+
+Multiple clients can share the same radio simultaneously. For example, you can run APRS Chat on your iPhone via BLE while Direwolf and PinPoint APRS connect over TCP KISS -- all using the same TNC.
 
 **Features:**
 
-- Web interface for configuration, pairing, and monitoring
+- **Multi-client radio sharing** -- BLE and TCP KISS clients share the same TNC
+- **TCP KISS server** (port 8001) for Direwolf, APRSIS32, Xastir, PinPoint APRS, and other KISS-capable software
+- **Web interface** for configuration, pairing, and monitoring
+- **TNC history** for quick-switching between paired radios
 - Auto-reconnection with exponential backoff
 - Real-time status via Server-Sent Events (SSE)
 - Systemd service for automatic startup
@@ -69,6 +79,24 @@ http://<pi-ip-address>:8080
 
 See [Installation Guide](docs/installation.md) for detailed instructions.
 
+## Use Cases
+
+### Share a single radio with multiple apps
+
+Connect your TNC once and use it from multiple devices simultaneously:
+
+- **APRS Chat on iPhone** (via BLE) + **Direwolf on laptop** (via TCP KISS) -- both using the same radio
+- **PinPoint APRS** + **APRSIS32** + **Xastir** -- all connected via TCP KISS on port 8001
+- **Mobile in the field**: iPhone app via BLE while a laptop runs Direwolf for digipeating
+
+### Bridge iOS to Bluetooth Classic TNCs
+
+iOS does not support Bluetooth Classic. The Pi acts as a transparent bridge so your iPhone ham radio apps work with any BT Classic TNC (Mobilinkd TNC3/TNC4, Kenwood TH-D74, etc).
+
+### Network-enable a Bluetooth TNC
+
+Turn any Bluetooth TNC into a network-accessible KISS TNC. Any software on your LAN that speaks KISS-over-TCP can connect to `<pi-ip>:8001` without needing Bluetooth on the client machine at all.
+
 ## Web Interface
 
 Pi BT Bridge includes a built-in web interface for easy management.
@@ -95,6 +123,9 @@ Edit `/etc/bt-bridge/config.json` or use the web interface Settings page.
 | `rfcomm_channel` | `2` | RFCOMM channel (1-30) |
 | `web_port` | `8080` | Web interface port |
 | `log_level` | `"INFO"` | DEBUG, INFO, WARNING, ERROR |
+| `tcp_kiss_enabled` | `true` | Enable TCP KISS server for desktop apps |
+| `tcp_kiss_port` | `8001` | TCP KISS listening port |
+| `tcp_kiss_max_clients` | `5` | Maximum simultaneous TCP KISS connections |
 
 See [Configuration Reference](docs/configuration.md) for all options.
 
@@ -185,11 +216,14 @@ src/
 ├── models/
 │   ├── state.py            # ConnectionState, BridgeState
 │   ├── kiss.py             # KISS protocol parser
-│   └── connection.py       # Connection tracking
+│   ├── hdlc.py             # HDLC protocol translation
+│   ├── connection.py       # Connection tracking (BLE, Classic, TCP)
+│   └── tnc_history.py      # TNC device history management
 ├── services/
 │   ├── ble_service.py      # BLE GATT server (Nordic UART)
 │   ├── classic_service.py  # BT Classic SPP client
-│   ├── bridge.py           # Bidirectional forwarding
+│   ├── bridge.py           # Multi-client frame forwarding
+│   ├── tcp_kiss_service.py # TCP KISS server for desktop apps
 │   ├── pairing_agent.py    # D-Bus pairing agent
 │   ├── scanner_service.py  # Bluetooth device scanner
 │   └── web_service.py      # Web interface (aiohttp)
@@ -208,6 +242,20 @@ src/
 | `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` | Service UUID |
 | `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` | TX Characteristic (write) |
 | `6E400003-B5A3-F393-E0A9-E50E24DCCA9E` | RX Characteristic (notify) |
+
+### TCP KISS Server
+
+The TCP KISS server (default port 8001) speaks standard KISS-over-TCP, compatible with any software that supports a network KISS TNC:
+
+| Software | Connection String |
+|----------|-------------------|
+| Direwolf | `kissutil -p <pi-ip>:8001` |
+| APRSIS32 | KISS TNC, host `<pi-ip>`, port `8001` |
+| Xastir | Network KISS TNC, `<pi-ip>:8001` |
+| PinPoint APRS | KISS TCP, `<pi-ip>:8001` |
+| Pat (Winlink) | `tcp://<pi-ip>:8001` |
+
+Multiple TCP clients can connect simultaneously (up to `tcp_kiss_max_clients`, default 5). All clients and the BLE connection share the same radio -- received frames are broadcast to all connected clients, and any client can transmit.
 
 ### KISS Protocol
 

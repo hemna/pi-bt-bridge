@@ -1,4 +1,4 @@
-"""Bluetooth connection models."""
+"""Bluetooth and TCP connection models."""
 
 from __future__ import annotations
 
@@ -189,6 +189,46 @@ class ClassicConnection:
         """
         delay = min(2**self.reconnect_attempts, max_delay)
         return float(delay)
+
+    def record_rx(self, size: int) -> None:
+        """Record received bytes."""
+        self.bytes_rx += size
+
+    def record_tx(self, size: int) -> None:
+        """Record transmitted bytes."""
+        self.bytes_tx += size
+
+
+@dataclass
+class TcpKissConnection:
+    """
+    State for a single TCP KISS client connection.
+
+    Tracks a connected TCP client that speaks KISS-over-TCP protocol.
+    Unlike BLE/Classic connections, TCP clients have no complex state
+    machine -- they are either connected or not.
+
+    Attributes:
+        remote_address: Remote IP:port of the connected client.
+        connected_at: When the client connected (UTC).
+        bytes_rx: Total bytes received from this client.
+        bytes_tx: Total bytes sent to this client.
+    """
+
+    remote_address: str = ""
+    connected_at: datetime | None = None
+    bytes_rx: int = 0
+    bytes_tx: int = 0
+
+    def set_connected(self, remote_address: str) -> None:
+        """
+        Mark connection as established.
+
+        Args:
+            remote_address: Remote IP:port string (e.g., "192.168.1.100:54321").
+        """
+        self.remote_address = remote_address
+        self.connected_at = datetime.now(UTC)
 
     def record_rx(self, size: int) -> None:
         """Record received bytes."""

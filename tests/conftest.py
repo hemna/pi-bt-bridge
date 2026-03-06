@@ -206,6 +206,34 @@ def mock_bridge_state(
 
 
 # =============================================================================
+# Mock TCP Writer Fixtures
+# =============================================================================
+
+
+def make_mock_tcp_writer(*, is_closing: bool = False) -> MagicMock:
+    """Create a mock asyncio.StreamWriter with correct sync/async method signatures.
+
+    On a real StreamWriter, write() and close() are synchronous while
+    drain() and wait_closed() are async.  Using AsyncMock for the sync
+    methods produces unawaited-coroutine RuntimeWarnings, so we set them
+    as regular MagicMock explicitly.
+
+    Args:
+        is_closing: Value returned by is_closing().
+
+    Returns:
+        Configured MagicMock mimicking asyncio.StreamWriter.
+    """
+    writer = MagicMock()
+    writer.write = MagicMock()  # sync in real StreamWriter
+    writer.close = MagicMock()  # sync in real StreamWriter
+    writer.is_closing = MagicMock(return_value=is_closing)
+    writer.drain = AsyncMock()
+    writer.wait_closed = AsyncMock()
+    return writer
+
+
+# =============================================================================
 # Utility Fixtures
 # =============================================================================
 
