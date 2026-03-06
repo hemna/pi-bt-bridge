@@ -88,20 +88,237 @@
     Both connections are inactive. Connect a phone via BLE and ensure TNC is paired.
 </div>
 {% endif %}
+
+<!-- TNC History -->
+<div class="card mt-2">
+    <h3>Known TNCs</h3>
+    <p class="text-muted mb-1" style="font-size: 0.875rem;">Previously paired TNC radios. Select one to connect.</p>
+    <div id="tnc-history-list">
+        <p class="text-muted text-center" style="padding: 1rem;">Loading...</p>
+    </div>
+    <div id="tnc-history-empty" class="hidden text-center" style="padding: 1rem;">
+        <p class="text-muted">No TNC devices in history yet.</p>
+        <p class="text-muted" style="font-size: 0.875rem;">Pair a TNC from the <a href="/pairing">Pairing</a> page to get started.</p>
+    </div>
+    <!-- Inline edit overlay -->
+    <div id="tnc-edit-overlay" class="hidden" style="background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 0.375rem; padding: 1rem; margin-top: 0.5rem;">
+        <h4 style="margin-bottom: 0.5rem;">Edit TNC Name</h4>
+        <div class="form-group" style="margin-bottom: 0.5rem;">
+            <label for="edit-friendly-name">Friendly Name</label>
+            <input type="text" id="edit-friendly-name" maxlength="50" placeholder="e.g. Base Station, Mobile Rig">
+            <p class="hint">Leave empty and save to use the Bluetooth name instead.</p>
+        </div>
+        <input type="hidden" id="edit-address">
+        <button class="btn btn-primary btn-sm" onclick="saveEditName()">Save</button>
+        <button class="btn btn-secondary btn-sm" onclick="cancelEdit()">Cancel</button>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-// Optional: Auto-refresh status via SSE
+// =========================================================
+// TNC History Management
+// =========================================================
+
+/**
+ * Fetch and render the TNC history list.
+ */
+async function loadTNCHistory() {
+    const listEl = document.getElementById('tnc-history-list');
+    const emptyEl = document.getElementById('tnc-history-empty');
+
+    try {
+        const resp = await fetch('/api/tnc-history');
+        if (!resp.ok) throw new Error('Failed to load TNC history');
+        const data = await resp.json();
+
+        if (data.count === 0) {
+            listEl.classList.add('hidden');
+            emptyEl.classList.remove('hidden');
+            return;
+        }
+
+        emptyEl.classList.add('hidden');
+        listEl.classList.remove('hidden');
+
+        let html = '<ul class="device-list">';
+        data.devices.forEach(function(device) {
+            const isCurrent = device.is_current;
+            const isPaired = device.is_paired;
+            const lastUsed = device.last_used
+                ? formatRelativeTime(device.last_used)
+                : 'Never used';
+
+            html += '<li class="device-item' + (isCurrent ? ' current' : '') + '">';
+            html += '  <div class="device-info">';
+            html += '    <span class="device-name">' + escapeHtml(device.display_name) + '</span>';
+            if (isCurrent) {
+                html += ' <span class="status-badge connected" style="font-size: 0.75rem; padding: 0.125rem 0.5rem;">Active</span>';
+            }
+            if (!isPaired) {
+                html += ' <span class="status-badge error" style="font-size: 0.75rem; padding: 0.125rem 0.5rem;">Not Paired</span>';
+            }
+            html += '    <br><span class="device-address">' + escapeHtml(device.address) + '</span>';
+            html += '    <span class="text-muted" style="font-size: 0.75rem; margin-left: 0.5rem;">CH ' + device.rfcomm_channel + '</span>';
+            html += '    <br><span class="text-muted" style="font-size: 0.75rem;">' + lastUsed + '</span>';
+            html += '  </div>';
+            html += '  <div style="display: flex; gap: 0.25rem; flex-wrap: wrap;">';
+            if (!isCurrent) {
+                html += '    <button class="btn btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;" onclick="selectTNC(\'' + escapeHtml(device.address) + '\')"' + (isPaired ? '' : ' disabled title="Pair this device first"') + '>Select</button>';
+            }
+            html += '    <button class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;" onclick="editTNC(\'' + escapeHtml(device.address) + '\', ' + JSON.stringify(device.friendly_name || '') + ')">Edit</button>';
+            if (!isCurrent) {
+                html += '    <button class="btn btn-danger" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;" onclick="removeTNC(\'' + escapeHtml(device.address) + '\', ' + JSON.stringify(device.display_name) + ')">Remove</button>';
+            }
+            html += '  </div>';
+            html += '</li>';
+        });
+        html += '</ul>';
+        listEl.innerHTML = html;
+    } catch (err) {
+        listEl.innerHTML = '<p class="text-muted text-center" style="color: var(--error-color);">Failed to load TNC history.</p>';
+        console.error('TNC history load error:', err);
+    }
+}
+
+/**
+ * Select a TNC from history as the active target.
+ */
+async function selectTNC(address) {
+    if (!confirm('Switch to this TNC? The bridge will attempt to connect.')) return;
+
+    try {
+        const resp = await fetch('/api/tnc-history/' + encodeURIComponent(address) + '/select', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+        });
+        const data = await resp.json();
+
+        if (resp.ok && data.success) {
+            // Reload page to reflect new active TNC
+            location.reload();
+        } else {
+            alert('Failed to select TNC: ' + (data.message || 'Unknown error'));
+            loadTNCHistory();
+        }
+    } catch (err) {
+        alert('Error selecting TNC: ' + err.message);
+    }
+}
+
+/**
+ * Show edit form for a TNC's friendly name.
+ */
+function editTNC(address, currentName) {
+    document.getElementById('edit-address').value = address;
+    document.getElementById('edit-friendly-name').value = currentName || '';
+    document.getElementById('tnc-edit-overlay').classList.remove('hidden');
+    document.getElementById('edit-friendly-name').focus();
+}
+
+/**
+ * Save the edited friendly name.
+ */
+async function saveEditName() {
+    const address = document.getElementById('edit-address').value;
+    const nameInput = document.getElementById('edit-friendly-name').value.trim();
+
+    // Empty string means clear the friendly name (use null)
+    const friendlyName = nameInput === '' ? null : nameInput;
+
+    try {
+        const resp = await fetch('/api/tnc-history/' + encodeURIComponent(address), {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({friendly_name: friendlyName}),
+        });
+        const data = await resp.json();
+
+        if (resp.ok && data.success) {
+            cancelEdit();
+            loadTNCHistory();
+        } else {
+            alert('Failed to update: ' + (data.message || 'Unknown error'));
+        }
+    } catch (err) {
+        alert('Error updating TNC: ' + err.message);
+    }
+}
+
+/**
+ * Cancel editing and hide the edit form.
+ */
+function cancelEdit() {
+    document.getElementById('tnc-edit-overlay').classList.add('hidden');
+}
+
+/**
+ * Remove a TNC from history with confirmation.
+ */
+async function removeTNC(address, displayName) {
+    if (!confirm('Remove "' + displayName + '" from history? This cannot be undone.')) return;
+
+    try {
+        const resp = await fetch('/api/tnc-history/' + encodeURIComponent(address), {
+            method: 'DELETE',
+        });
+        const data = await resp.json();
+
+        if (resp.ok && data.success) {
+            loadTNCHistory();
+        } else {
+            alert('Failed to remove: ' + (data.message || 'Unknown error'));
+        }
+    } catch (err) {
+        alert('Error removing TNC: ' + err.message);
+    }
+}
+
+/**
+ * Format an ISO timestamp as a relative time string.
+ */
+function formatRelativeTime(isoString) {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffSec = Math.floor(diffMs / 1000);
+    const diffMin = Math.floor(diffSec / 60);
+    const diffHr = Math.floor(diffMin / 60);
+    const diffDay = Math.floor(diffHr / 24);
+
+    if (diffSec < 60) return 'Just now';
+    if (diffMin < 60) return diffMin + ' min ago';
+    if (diffHr < 24) return diffHr + ' hr ago';
+    if (diffDay < 7) return diffDay + ' day' + (diffDay > 1 ? 's' : '') + ' ago';
+    return date.toLocaleDateString();
+}
+
+/**
+ * Escape HTML entities to prevent XSS.
+ */
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// Load TNC history on page load
+document.addEventListener('DOMContentLoaded', loadTNCHistory);
+
+// =========================================================
+// SSE and uptime
+// =========================================================
+
+// Auto-refresh status via SSE
 if (typeof EventSource !== 'undefined') {
     const evtSource = new EventSource('/api/status/stream');
-    
+
     evtSource.addEventListener('status', function(event) {
-        // Reload page on status change for simplicity
-        // A more sophisticated implementation would update DOM elements
         location.reload();
     });
-    
+
     evtSource.addEventListener('error', function(event) {
         console.log('SSE connection error, will retry...');
     });
