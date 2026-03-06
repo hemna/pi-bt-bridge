@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import subprocess
 from collections.abc import Callable
@@ -319,13 +320,27 @@ class BLEService:
 
         # Fragment data to MTU size
         payload_size = self._connection.payload_size
-        for i in range(0, len(data), payload_size):
-            chunk = data[i : i + payload_size]
+        chunks = [data[i : i + payload_size] for i in range(0, len(data), payload_size)]
+
+        for chunk in chunks:
             rx_char.value = bytearray(chunk)
-            self._server.update_value(NUS_SERVICE_UUID, NUS_RX_CHAR_UUID)
+            result = self._server.update_value(NUS_SERVICE_UUID, NUS_RX_CHAR_UUID)
+            if not result:
+                logger.warning("BLE notification failed for %d byte chunk", len(chunk))
             self._connection.record_tx(len(chunk))
 
-        logger.debug("Sent %d bytes via BLE", len(data))
+            # Small yield between chunks to let BlueZ process the D-Bus
+            # PropertiesChanged signal before we fire the next one.
+            # Without this, rapid notifications can be coalesced/dropped.
+            if len(chunks) > 1:
+                await asyncio.sleep(0.01)
+
+        logger.debug(
+            "Sent %d bytes via BLE (%d chunks): %s",
+            len(data),
+            len(chunks),
+            data[:40].hex(),
+        )
 
     def _handle_read_request(
         self,
@@ -349,7 +364,7 @@ class BLEService:
                 self.handle_connection("BLE-client", "iPhone")
 
             self._connection.record_rx(len(value))
-            logger.debug("Received %d bytes via BLE", len(value))
+            logger.debug("Received %d bytes via BLE: %s", len(value), bytes(value)[:40].hex())
 
             if self._on_data_received:
                 self._on_data_received(value)

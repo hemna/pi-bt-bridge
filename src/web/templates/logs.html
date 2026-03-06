@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Logs - Pi BT Bridge{% endblock %}
+
+{% block head %}
+<style>
+    /* On the logs page the panel fills all available vertical space */
+    body { height: 100dvh; }
+    main {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        max-width: none;
+    }
+    main > h2 { flex-shrink: 0; }
+    .log-panel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        margin-bottom: 0;
+    }
+    .log-panel-body {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+    .log-viewer {
+        flex: 1;
+        height: auto;
+        min-height: 150px;
+    }
+    footer { flex-shrink: 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<h2>Live Logs</h2>
+
+{% set log_panel_expanded = true %}
+{% include "_log_panel.html" %}
+{% endblock %}

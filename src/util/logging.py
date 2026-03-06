@@ -2,14 +2,129 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
+import threading
+from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 
 # Custom log format with structured fields
 LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# Singleton SSE log handler, set by setup_logging() when called with sse=True
+_sse_log_handler: SSELogHandler | None = None
+
+
+def get_sse_log_handler() -> SSELogHandler | None:
+    """Get the global SSE log handler instance (if configured)."""
+    return _sse_log_handler
+
+
+class SSELogHandler(logging.Handler):
+    """
+    Logging handler that stores entries in a ring buffer and pushes to SSE consumers.
+
+    Keeps the last ``maxlen`` formatted log entries in memory so that new
+    SSE clients can receive recent history, and publishes each new entry to
+    all registered async queues so they can be streamed in real time.
+    """
+
+    def __init__(self, maxlen: int = 500, level: int = logging.DEBUG) -> None:
+        """
+        Initialize the SSE log handler.
+
+        Args:
+            maxlen: Maximum number of log entries to retain.
+            level: Minimum log level to capture.
+        """
+        super().__init__(level)
+        self._buffer: deque[dict[str, str]] = deque(maxlen=maxlen)
+        self._subscribers: list[asyncio.Queue[dict[str, str]]] = []
+        self._lock = threading.Lock()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """
+        Process a log record.
+
+        Stores the formatted entry in the ring buffer and pushes it
+        to all active SSE subscriber queues.
+        """
+        try:
+            entry = self._format_entry(record)
+            with self._lock:
+                self._buffer.append(entry)
+                for queue in self._subscribers:
+                    try:
+                        queue.put_nowait(entry)
+                    except asyncio.QueueFull:
+                        # Drop oldest entry to make room
+                        try:
+                            queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                        try:
+                            queue.put_nowait(entry)
+                        except asyncio.QueueFull:
+                            pass
+        except Exception:  # noqa: BLE001
+            self.handleError(record)
+
+    def _format_entry(self, record: logging.LogRecord) -> dict[str, str]:
+        """Format a log record into a dict suitable for JSON serialisation."""
+        # Use getMessage() for the raw message text (without timestamp/level prefix)
+        # so the UI can format display using the structured fields.
+        msg = record.getMessage()
+        # Append structured data if present (mirrors StructuredFormatter behaviour)
+        if hasattr(record, "structured_data") and record.structured_data:
+            pairs = " ".join(f"{k}={v}" for k, v in record.structured_data.items())
+            msg = f"{msg} | {pairs}"
+        return {
+            "timestamp": datetime.now(UTC).strftime(DATE_FORMAT),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": msg,
+        }
+
+    def get_recent(self, count: int | None = None) -> list[dict[str, str]]:
+        """
+        Return recent log entries from the ring buffer.
+
+        Args:
+            count: Max entries to return. ``None`` means all buffered.
+
+        Returns:
+            List of log entry dicts, oldest first.
+        """
+        with self._lock:
+            if count is None:
+                return list(self._buffer)
+            return list(self._buffer)[-count:]
+
+    def subscribe(self) -> asyncio.Queue[dict[str, str]]:
+        """
+        Create a new subscriber queue for real-time log streaming.
+
+        Returns:
+            An asyncio.Queue that will receive new log entries.
+        """
+        queue: asyncio.Queue[dict[str, str]] = asyncio.Queue(maxsize=200)
+        with self._lock:
+            self._subscribers.append(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue[dict[str, str]]) -> None:
+        """
+        Remove a subscriber queue.
+
+        Args:
+            queue: The queue previously returned by ``subscribe()``.
+        """
+        with self._lock:
+            if queue in self._subscribers:
+                self._subscribers.remove(queue)
 
 
 class StructuredFormatter(logging.Formatter):
@@ -37,6 +152,7 @@ def setup_logging(
     level: str = "INFO",
     log_file: str | None = None,
     name: str = "bt-bridge",
+    sse: bool = False,
 ) -> logging.Logger:
     """
     Configure logging for the daemon.
@@ -45,10 +161,13 @@ def setup_logging(
         level: Log level (DEBUG, INFO, WARNING, ERROR).
         log_file: Optional log file path. None for stdout only.
         name: Logger name.
+        sse: If True, attach an SSELogHandler for real-time web streaming.
 
     Returns:
         Configured logger instance.
     """
+    global _sse_log_handler  # noqa: PLW0603
+
     logger = logging.getLogger(name)
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
@@ -68,6 +187,12 @@ def setup_logging(
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
+
+    # SSE handler for real-time web log streaming
+    if sse:
+        _sse_log_handler = SSELogHandler(maxlen=500, level=logging.DEBUG)
+        _sse_log_handler.setFormatter(formatter)
+        logger.addHandler(_sse_log_handler)
 
     # Don't propagate to root logger
     logger.propagate = False

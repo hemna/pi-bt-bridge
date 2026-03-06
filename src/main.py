@@ -171,10 +171,11 @@ def main() -> int:
         print(f"Configuration error: {e}", file=sys.stderr)
         return 1
 
-    # Set up logging
+    # Set up logging (sse=True enables real-time log streaming to the web UI)
     setup_logging(
         level=config.log_level,
         log_file=config.log_file,
+        sse=True,
     )
 
     # Validate startup
