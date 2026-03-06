@@ -35,10 +35,16 @@ NUS_SERVICE = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 NUS_TX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 NUS_RX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 
-# TH-D74 configuration
-TH_D74_MAC = "24:71:89:8D:26:EF"
+# Config file path
+CONFIG_FILE = Path("/etc/bt-bridge/config.json")
+
+# Default TNC configuration (can be overridden by config file)
+DEFAULT_TNC_MAC = "24:71:89:8D:26:EF"
+DEFAULT_TNC_CHANNEL = 2
 SPP_UUID = "00001101-0000-1000-8000-00805F9B34FB"
-SPP_CHANNEL = 2  # TH-D74 SPP channel
+
+# Current TNC config (loaded from file or defaults)
+tnc_config = {"mac": DEFAULT_TNC_MAC, "channel": DEFAULT_TNC_CHANNEL, "name": "TH-D74"}
 
 # Web server port
 WEB_PORT = 8080
@@ -125,6 +131,159 @@ if HAS_DBUS:
         @dbus.service.method(AGENT_INTERFACE, in_signature="", out_signature="")
         def Cancel(self):
             print("[Agent] Cancel", flush=True)
+
+
+def load_config():
+    """Load TNC configuration from file."""
+    global tnc_config
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE) as f:
+                data = json.load(f)
+                tnc_config["mac"] = data.get("tnc_mac", DEFAULT_TNC_MAC)
+                tnc_config["channel"] = data.get("tnc_channel", DEFAULT_TNC_CHANNEL)
+                tnc_config["name"] = data.get("tnc_name", "Unknown")
+                print(f"Loaded config: {tnc_config['name']} at {tnc_config['mac']}", flush=True)
+        except Exception as e:
+            print(f"Failed to load config: {e}", flush=True)
+    else:
+        print(f"No config file found, using defaults", flush=True)
+
+
+def save_config():
+    """Save TNC configuration to file."""
+    try:
+        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(
+                {
+                    "tnc_mac": tnc_config["mac"],
+                    "tnc_channel": tnc_config["channel"],
+                    "tnc_name": tnc_config["name"],
+                },
+                f,
+                indent=2,
+            )
+        print(f"Saved config: {tnc_config['name']} at {tnc_config['mac']}", flush=True)
+        return True
+    except Exception as e:
+        print(f"Failed to save config: {e}", flush=True)
+        return False
+
+
+async def scan_bluetooth_devices(duration=8):
+    """Scan for nearby Bluetooth Classic devices."""
+    log(f"Scanning for Bluetooth devices ({duration}s)...")
+    devices = []
+
+    try:
+        # Use bluetoothctl for scanning
+        proc = await asyncio.create_subprocess_exec(
+            "bluetoothctl",
+            "--timeout",
+            str(duration),
+            "scan",
+            "on",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
+        # Get list of discovered devices
+        proc = await asyncio.create_subprocess_exec(
+            "bluetoothctl",
+            "devices",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+
+        for line in stdout.decode().strip().split("\n"):
+            if line.startswith("Device "):
+                parts = line.split(" ", 2)
+                if len(parts) >= 3:
+                    mac = parts[1]
+                    name = parts[2] if len(parts) > 2 else "Unknown"
+                    devices.append({"mac": mac, "name": name})
+
+        log(f"Found {len(devices)} devices")
+    except Exception as e:
+        log(f"Scan error: {e}")
+
+    return devices
+
+
+async def pair_device(mac):
+    """Pair with a Bluetooth device."""
+    log(f"Pairing with {mac}...")
+
+    try:
+        # Trust the device first
+        proc = await asyncio.create_subprocess_exec(
+            "bluetoothctl",
+            "trust",
+            mac,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
+        # Pair with the device
+        proc = await asyncio.create_subprocess_exec(
+            "bluetoothctl",
+            "pair",
+            mac,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        output = stdout.decode() + stderr.decode()
+        if "Pairing successful" in output or "already paired" in output.lower():
+            log(f"Paired with {mac}")
+            return True, "Paired successfully"
+        else:
+            log(f"Pairing failed: {output}")
+            return False, output
+    except Exception as e:
+        log(f"Pairing error: {e}")
+        return False, str(e)
+
+
+async def find_spp_channel(mac):
+    """Find the SPP (Serial Port) channel for a device."""
+    log(f"Looking up SPP channel for {mac}...")
+
+    try:
+        # Use sdptool to find SPP service
+        proc = await asyncio.create_subprocess_exec(
+            "sdptool",
+            "search",
+            "--bdaddr",
+            mac,
+            "SP",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+
+        output = stdout.decode()
+        # Parse output for channel number
+        for line in output.split("\n"):
+            if "Channel:" in line:
+                try:
+                    channel = int(line.split(":")[-1].strip())
+                    log(f"Found SPP channel: {channel}")
+                    return channel
+                except ValueError:
+                    pass
+
+        # Default to channel 1 if not found
+        log("SPP channel not found, defaulting to 1")
+        return 1
+    except Exception as e:
+        log(f"SPP lookup error: {e}")
+        return 1
 
 
 def log(msg):
@@ -222,13 +381,13 @@ async def connect_classic():
         log("Classic BT already connected")
         return True, "Already connected"
 
-    log("Connecting to TNC...")
+    log(f"Connecting to TNC at {tnc_config['mac']} channel {tnc_config['channel']}...")
 
     # 1. Connect raw socket for TX
     try:
         rfcomm_tx = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
         rfcomm_tx.settimeout(15)
-        rfcomm_tx.connect((TH_D74_MAC, SPP_CHANNEL))
+        rfcomm_tx.connect((tnc_config["mac"], tnc_config["channel"]))
         rfcomm_tx.settimeout(None)
         stats["classic_connected"] = True
         log("Raw TX socket CONNECTED!")
@@ -241,7 +400,7 @@ async def connect_classic():
     # 2. Try PyBluez socket for RX
     try:
         rfcomm_rx = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-        rfcomm_rx.connect((TH_D74_MAC, SPP_CHANNEL))
+        rfcomm_rx.connect((tnc_config["mac"], tnc_config["channel"]))
         log("PyBluez RX socket CONNECTED!")
     except Exception as e:
         log(f"PyBluez RX socket failed (expected): {e}")
@@ -352,12 +511,20 @@ async def handle_index(request):
         .btn-success {{ background: #28a745; color: white; }}
         .btn-danger {{ background: #dc3545; color: white; }}
         .btn-warning {{ background: #ffc107; color: #333; }}
+        .btn-secondary {{ background: #6c757d; color: white; }}
         .btn:hover {{ opacity: 0.8; }}
         .btn:disabled {{ opacity: 0.5; cursor: not-allowed; }}
         .controls {{ margin-top: 10px; }}
         .toast {{ position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 12px 24px; border-radius: 8px; display: none; z-index: 1000; }}
         .toast.show {{ display: block; animation: fadeIn 0.3s; }}
         @keyframes fadeIn {{ from {{ opacity: 0; }} to {{ opacity: 1; }} }}
+        .device-list {{ margin: 10px 0; max-height: 200px; overflow-y: auto; }}
+        .device-item {{ padding: 10px; margin: 5px 0; background: white; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }}
+        .device-item.selected {{ border: 2px solid #007bff; }}
+        .device-name {{ font-weight: bold; }}
+        .device-mac {{ font-size: 12px; color: #666; font-family: monospace; }}
+        .scanning {{ color: #666; font-style: italic; }}
+        #scan-results {{ min-height: 50px; }}
     </style>
 </head>
 <body>
@@ -373,7 +540,14 @@ async def handle_index(request):
             {"Connected" if stats["classic_connected"] else "Disconnected"}</span>
             {disconnect_btn if stats["classic_connected"] else connect_btn}
         </p>
-        <p>Target: <code>{TH_D74_MAC}</code> (RFCOMM {SPP_CHANNEL})</p>
+        <p>Target: <code>{tnc_config["mac"]}</code> (RFCOMM {tnc_config["channel"]}) - {tnc_config["name"]}</p>
+    </div>
+
+    <div class="card">
+        <h3>TNC Selection</h3>
+        <p>Scan for nearby Bluetooth devices to select a different TNC.</p>
+        <button class="btn btn-primary" onclick="startScan()" id="scan-btn">Scan for Devices</button>
+        <div id="scan-results"></div>
     </div>
     
     <div class="card">
@@ -399,7 +573,7 @@ async def handle_index(request):
     <div class="card">
         <h3>System</h3>
         <p>Uptime: {int(uptime)}s</p>
-        <p>Version: 1.1.0</p>
+        <p>Version: 1.2.0</p>
         <div class="controls">
             <button class="btn btn-danger" onclick="action('restart')">Restart Bridge</button>
         </div>
@@ -411,7 +585,7 @@ async def handle_index(request):
         let autoRefresh = true;
         
         async function action(name) {{
-            autoRefresh = false;  // Pause auto-refresh during action
+            autoRefresh = false;
             const toast = document.getElementById('toast');
             toast.textContent = 'Working...';
             toast.classList.add('show');
@@ -421,7 +595,6 @@ async def handle_index(request):
                 const data = await resp.json();
                 toast.textContent = data.message || (data.success ? 'Success' : 'Failed');
                 
-                // Longer delay for restart since service needs time to come back
                 const delay = (name === 'restart') ? 8000 : 1500;
                 if (name === 'restart') {{
                     toast.textContent = 'Restarting... page will reload in 8s';
@@ -431,7 +604,6 @@ async def handle_index(request):
                     location.reload();
                 }}, delay);
             }} catch (e) {{
-                // For restart, connection error is expected - wait and reload
                 if (name === 'restart') {{
                     toast.textContent = 'Restarting... page will reload in 8s';
                     setTimeout(() => location.reload(), 8000);
@@ -442,6 +614,66 @@ async def handle_index(request):
                         autoRefresh = true;
                     }}, 3000);
                 }}
+            }}
+        }}
+
+        async function startScan() {{
+            autoRefresh = false;
+            const btn = document.getElementById('scan-btn');
+            const results = document.getElementById('scan-results');
+            
+            btn.disabled = true;
+            btn.textContent = 'Scanning...';
+            results.innerHTML = '<p class="scanning">Scanning for Bluetooth devices (8 seconds)...</p>';
+            
+            try {{
+                const resp = await fetch('/api/scan', {{ method: 'POST' }});
+                const data = await resp.json();
+                
+                if (data.devices && data.devices.length > 0) {{
+                    let html = '<div class="device-list">';
+                    for (const dev of data.devices) {{
+                        html += `<div class="device-item">
+                            <div>
+                                <div class="device-name">${{dev.name}}</div>
+                                <div class="device-mac">${{dev.mac}}</div>
+                            </div>
+                            <button class="btn btn-primary" onclick="selectDevice('${{dev.mac}}', '${{dev.name}}')">Select</button>
+                        </div>`;
+                    }}
+                    html += '</div>';
+                    results.innerHTML = html;
+                }} else {{
+                    results.innerHTML = '<p>No devices found. Make sure your TNC is in pairing mode.</p>';
+                }}
+            }} catch (e) {{
+                results.innerHTML = '<p>Scan failed: ' + e.message + '</p>';
+            }}
+            
+            btn.disabled = false;
+            btn.textContent = 'Scan for Devices';
+        }}
+
+        async function selectDevice(mac, name) {{
+            const toast = document.getElementById('toast');
+            toast.textContent = 'Selecting device...';
+            toast.classList.add('show');
+            
+            try {{
+                const resp = await fetch('/api/select', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ mac: mac, name: name }})
+                }});
+                const data = await resp.json();
+                toast.textContent = data.message || (data.success ? 'Device selected!' : 'Failed');
+                setTimeout(() => {{
+                    toast.classList.remove('show');
+                    location.reload();
+                }}, 1500);
+            }} catch (e) {{
+                toast.textContent = 'Error: ' + e.message;
+                setTimeout(() => toast.classList.remove('show'), 3000);
             }}
         }}
         
@@ -463,8 +695,9 @@ async def handle_api_status(request):
         {
             "ble_connected": stats["ble_connected"],
             "classic_connected": stats["classic_connected"],
-            "target_address": TH_D74_MAC,
-            "rfcomm_channel": SPP_CHANNEL,
+            "target_address": tnc_config["mac"],
+            "rfcomm_channel": tnc_config["channel"],
+            "tnc_name": tnc_config["name"],
             "packets_tx": stats["packets_tx"],
             "packets_rx": stats["packets_rx"],
             "bytes_tx": stats["bytes_tx"],
@@ -505,6 +738,68 @@ async def handle_api_action(request):
         )
 
 
+async def handle_api_scan(request):
+    """Scan for nearby Bluetooth devices."""
+    log("Starting Bluetooth scan from web interface...")
+    try:
+        devices = await scan_bluetooth_devices()
+        return web.json_response({"success": True, "devices": devices})
+    except Exception as e:
+        log(f"Scan error: {e}")
+        return web.json_response({"success": False, "error": str(e), "devices": []})
+
+
+async def handle_api_select(request):
+    """Select a new TNC device."""
+    global tnc_config
+
+    try:
+        data = await request.json()
+        mac = data.get("mac")
+        name = data.get("name", "Unknown")
+
+        if not mac:
+            return web.json_response({"success": False, "message": "MAC address required"})
+
+        log(f"Selecting new TNC: {name} ({mac})")
+
+        # Disconnect from current TNC if connected
+        if stats["classic_connected"]:
+            await disconnect_classic()
+
+        # Pair with the new device
+        success, pair_msg = await pair_device(mac)
+        if not success and "already paired" not in pair_msg.lower():
+            log(f"Pairing failed, continuing anyway: {pair_msg}")
+
+        # Find the SPP channel
+        channel = await find_spp_channel(mac)
+
+        # Update config
+        tnc_config["mac"] = mac
+        tnc_config["channel"] = channel
+        tnc_config["name"] = name
+
+        # Save to file
+        save_config()
+
+        # Try to connect to the new TNC
+        connect_success, connect_msg = await connect_classic()
+
+        return web.json_response(
+            {
+                "success": True,
+                "message": f"Selected {name} on channel {channel}",
+                "connected": connect_success,
+                "channel": channel,
+            }
+        )
+
+    except Exception as e:
+        log(f"Select error: {e}")
+        return web.json_response({"success": False, "message": str(e)})
+
+
 async def start_web_server():
     """Start the web server."""
     if not HAS_WEB:
@@ -514,6 +809,8 @@ async def start_web_server():
     app.router.add_get("/", handle_index)
     app.router.add_get("/api/status", handle_api_status)
     app.router.add_post("/api/action/{action}", handle_api_action)
+    app.router.add_post("/api/scan", handle_api_scan)
+    app.router.add_post("/api/select", handle_api_select)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -525,6 +822,9 @@ async def start_web_server():
 
 async def main():
     global rfcomm_tx, rfcomm_rx, server, log_file, reader_task, agent
+
+    # Load TNC config from file (or use defaults)
+    load_config()
 
     stats["started_at"] = datetime.now()
     log_file = open("/tmp/bridge_packets.log", "w")
