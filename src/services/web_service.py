@@ -230,19 +230,22 @@ class WebService:
         """Get current bridge status."""
         # If we have bridge state, use it
         if self.bridge_state:
+            # Map src.models.state.ConnectionState -> src.web.models.ConnectionState
+            # by value string (both enums use the same string values)
+            ble_state = ConnectionState(self.bridge_state.ble.state.value)
             ble_status = BLEStatus(
-                state=ConnectionState.CONNECTED
-                if self.bridge_state.ble.is_connected
-                else ConnectionState.IDLE,
+                state=ble_state,
                 device_name=self.bridge_state.ble.device_name,
                 device_address=self.bridge_state.ble.device_address,
                 connected_at=self.bridge_state.ble.connected_at,
                 advertising=getattr(self.bridge_state.ble, "advertising", False),
             )
+            # Use actual connection state from the classic service
+            classic_state = ConnectionState(self.bridge_state.classic.state.value)
+            if self._classic_service is not None:
+                classic_state = ConnectionState(self._classic_service.connection.state.value)
             classic_status = ClassicStatus(
-                state=ConnectionState.CONNECTED
-                if self.bridge_state.classic.is_connected
-                else ConnectionState.IDLE,
+                state=classic_state,
                 target_address=self.bridge_state.classic.target_address,
                 target_name=getattr(self.bridge_state.classic, "device_name", None),
                 connected_at=self.bridge_state.classic.connected_at,
@@ -329,10 +332,11 @@ class WebService:
             status = self._get_bridge_status()
             await self._send_sse_event(response, "status", status.to_dict())
 
-            # Keep connection alive with periodic pings
+            # Push status updates every 3 seconds so the UI stays current
             while True:
-                await asyncio.sleep(30)
-                await self._send_sse_event(response, "ping", {"time": datetime.now().isoformat()})
+                await asyncio.sleep(3)
+                status = self._get_bridge_status()
+                await self._send_sse_event(response, "status", status.to_dict())
         except (ConnectionResetError, asyncio.CancelledError):
             pass
         finally:
