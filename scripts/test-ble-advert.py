@@ -10,9 +10,9 @@ Usage:
 """
 
 import asyncio
+import signal
 import subprocess
 import sys
-import signal
 
 # Nordic UART Service UUIDs (what aprs-chat-ios expects)
 NUS_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -49,7 +49,7 @@ async def main():
 
     # Import bless here to catch import errors early
     try:
-        from bless import BlessServer, GATTCharacteristicProperties, GATTAttributePermissions
+        from bless import BlessServer, GATTAttributePermissions, GATTCharacteristicProperties
     except ImportError as e:
         print(f"[ERROR] Cannot import bless: {e}")
         print("Make sure you're in the venv: source .venv/bin/activate")

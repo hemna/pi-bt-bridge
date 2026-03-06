@@ -3,12 +3,13 @@
 
 import asyncio
 import json
-import subprocess
 import socket  # Raw socket for TX (works!)
-import bluetooth  # PyBluez for RX (required for receiving)
+import subprocess
 from datetime import datetime
 from pathlib import Path
-from bless import BlessServer, GATTCharacteristicProperties, GATTAttributePermissions
+
+import bluetooth  # PyBluez for RX (required for receiving)
+from bless import BlessServer, GATTAttributePermissions, GATTCharacteristicProperties
 
 # Try to import aiohttp for web interface
 try:
@@ -22,8 +23,8 @@ except ImportError:
 # Try to import dbus for pairing agent
 try:
     import dbus
-    import dbus.service
     import dbus.mainloop.glib
+    import dbus.service
     from gi.repository import GLib
 
     HAS_DBUS = True
@@ -147,7 +148,7 @@ def load_config():
         except Exception as e:
             print(f"Failed to load config: {e}", flush=True)
     else:
-        print(f"No config file found, using defaults", flush=True)
+        print("No config file found, using defaults", flush=True)
 
 
 def save_config():
@@ -330,7 +331,7 @@ def ble_write(char, value, **kwargs):
         except Exception as e:
             log(f"  ERROR sending to TNC: {e}")
     else:
-        log(f"  WARNING: TNC TX socket not connected!")
+        log("  WARNING: TNC TX socket not connected!")
 
 
 async def tnc_reader():
@@ -364,7 +365,7 @@ async def tnc_reader():
                     if char:
                         char.value = bytearray(data)
                         server.update_value(NUS_SERVICE, NUS_RX)
-                        log(f"  -> Forwarded to iPhone via BLE notify")
+                        log("  -> Forwarded to iPhone via BLE notify")
         except Exception as e:
             log(f"TNC read error: {e}")
             break
