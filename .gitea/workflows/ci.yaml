@@ -56,12 +56,11 @@ jobs:
 
       - name: Push to GitHub
         env:
-          GH_DEPLOY_KEY_B64: ${{ secrets.GH_DEPLOY_KEY_B64 }}
+          GH_DEPLOY_KEY: ${{ secrets.GH_DEPLOY_KEY }}
         run: |
-          # Set up SSH key for GitHub (base64 decoded)
+          # Set up SSH key for GitHub
           mkdir -p ~/.ssh
-          # Remove any whitespace/newlines from the base64 string and decode
-          echo "$GH_DEPLOY_KEY_B64" | tr -d '[:space:]' | base64 -d > ~/.ssh/github_key
+          echo "$GH_DEPLOY_KEY" > ~/.ssh/github_key
           chmod 600 ~/.ssh/github_key
           
           # Configure SSH to use the key for github.com
