@@ -1,6 +1,6 @@
 # Pi BT Bridge
 
-A Bluetooth LE to Bluetooth Classic bridge daemon for Raspberry Pi, designed to connect iOS ham radio apps to Bluetooth Classic TNC devices.
+A Bluetooth LE to Bluetooth Classic bridge daemon for Raspberry Pi Zero 2 W, designed to connect iOS ham radio apps to Bluetooth Classic TNC devices.
 
 ## Overview
 
@@ -12,15 +12,22 @@ Many ham radio TNC (Terminal Node Controller) devices use Bluetooth Classic Seri
 
 ```
 ┌─────────┐      BLE/NUS      ┌──────────────┐    BT Classic/SPP    ┌─────────┐
-│  iPhone │ ◄───────────────► │  Pi BT Bridge │ ◄─────────────────► │   TNC   │
-│   App   │                   │    Daemon     │                      │ Device  │
+│  iPhone │ ◄───────────────► │  Raspberry   │ ◄─────────────────► │   TNC   │
+│   App   │                   │   Pi Zero    │                      │ Device  │
 └─────────┘                   └──────────────┘                      └─────────┘
 ```
+
+**Features:**
+
+- Web interface for configuration, pairing, and monitoring
+- Auto-reconnection with exponential backoff
+- Real-time status via Server-Sent Events (SSE)
+- Systemd service for automatic startup
 
 ## Hardware Requirements
 
 - **Raspberry Pi Zero 2 W** (recommended) or any Pi with Bluetooth
-- Your Bluetooth Classic TNC device (e.g., Mobilinkd TNC3, TNC4)
+- Your Bluetooth Classic TNC device (e.g., Mobilinkd TNC3/TNC4, Kenwood TH-D74)
 
 ## Software Requirements
 
@@ -28,135 +35,93 @@ Many ham radio TNC (Terminal Node Controller) devices use Bluetooth Classic Seri
 - Python 3.11+
 - BlueZ 5.x (included with Raspberry Pi OS)
 
-## Installation
+## Quick Start
 
-### Quick Install (Recommended)
+### 1. Install
 
 ```bash
-# Clone the repository
-git clone https://github.com/youruser/pi-bt-bridge.git
+git clone https://github.com/hemna/pi-bt-bridge.git
 cd pi-bt-bridge
-
-# Run the install script (requires sudo)
 sudo ./scripts/install.sh
 ```
 
-### Manual Installation
+### 2. Access Web Interface
 
-```bash
-# Install system dependencies
-sudo apt update
-sudo apt install -y python3-pip python3-dbus python3-gi bluetooth bluez
+Open a browser and navigate to:
 
-# Clone and install
-git clone https://github.com/youruser/pi-bt-bridge.git
-cd pi-bt-bridge
-pip3 install -e .
-
-# Create config directory
-sudo mkdir -p /etc/bt-bridge
-sudo cp config.example.json /etc/bt-bridge/config.json
 ```
+http://<pi-ip-address>:8080
+```
+
+### 3. Pair Your TNC
+
+1. Go to the **Pairing** page
+2. Click "Scan for Devices"
+3. Select your TNC and click "Pair"
+4. Enter PIN if prompted (usually `0000`)
+5. Click "Use as TNC" to set as target
+
+### 4. Connect from iOS
+
+1. Open your ham radio app (e.g., APRS.fi)
+2. Go to Bluetooth settings
+3. Connect to "PiBTBridge"
+
+See [Installation Guide](docs/installation.md) for detailed instructions.
+
+## Web Interface
+
+Pi BT Bridge includes a built-in web interface for easy management.
+
+![Status Page](docs/screenshots/status.png)
+
+| Page | Description |
+|------|-------------|
+| **Status** | Real-time connection status and bridge info |
+| **Pairing** | Scan for and pair with Bluetooth devices |
+| **Settings** | Configure device name, target TNC, logging |
+| **Statistics** | View packet counts and throughput |
+
+See [Web Interface Guide](docs/web-interface.md) for details.
 
 ## Configuration
 
-Edit the configuration file at `/etc/bt-bridge/config.json`:
+Edit `/etc/bt-bridge/config.json` or use the web interface Settings page.
 
-```json
-{
-  "target_address": "00:11:22:33:44:55",
-  "target_pin": "0000",
-  "device_name": "PiBTBridge",
-  "log_level": "INFO",
-  "log_file": "/var/log/bt-bridge.log",
-  "buffer_size": 4096,
-  "reconnect_max_delay": 30,
-  "status_socket": "/var/run/bt-bridge.sock"
-}
-```
+| Option | Default | Description |
+|--------|---------|-------------|
+| `target_address` | (required) | TNC Bluetooth MAC address |
+| `device_name` | `"PiBTBridge"` | BLE name shown on iPhone |
+| `rfcomm_channel` | `2` | RFCOMM channel (1-30) |
+| `web_port` | `8080` | Web interface port |
+| `log_level` | `"INFO"` | DEBUG, INFO, WARNING, ERROR |
 
-### Configuration Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `target_address` | MAC address of your TNC device (required) | - |
-| `target_pin` | Bluetooth pairing PIN | `"0000"` |
-| `device_name` | BLE advertised name (shown on iPhone) | `"PiBTBridge"` |
-| `log_level` | Logging verbosity: DEBUG, INFO, WARNING, ERROR | `"INFO"` |
-| `log_file` | Log file path, or `null` for stdout | `null` |
-| `buffer_size` | Internal buffer size in bytes | `4096` |
-| `reconnect_max_delay` | Max seconds between reconnection attempts | `30` |
-| `status_socket` | Unix socket path for status queries | `/var/run/bt-bridge.sock` |
-
-### Finding Your TNC's Bluetooth Address
-
-```bash
-# Make sure your TNC is in pairing mode, then scan:
-bluetoothctl scan on
-
-# Look for your device in the output, e.g.:
-# [NEW] Device 00:11:22:33:44:55 Mobilinkd TNC3
-```
+See [Configuration Reference](docs/configuration.md) for all options.
 
 ## Usage
 
-### Running as a Systemd Service (Recommended)
+### Systemd Service
 
 ```bash
-# Enable service to start on boot
-sudo systemctl enable bt-bridge
-
-# Start the service
+# Start/stop/restart
 sudo systemctl start bt-bridge
-
-# Check status
-sudo systemctl status bt-bridge
+sudo systemctl stop bt-bridge
+sudo systemctl restart bt-bridge
 
 # View logs
 sudo journalctl -u bt-bridge -f
+
+# Enable on boot
+sudo systemctl enable bt-bridge
 ```
 
 ### Running Manually
 
 ```bash
-# With default config location
 sudo python3 -m src.main
 
-# With custom config file
+# With custom config
 BT_BRIDGE_CONFIG=/path/to/config.json sudo python3 -m src.main
-```
-
-### Connecting from iOS
-
-1. Ensure the bridge daemon is running
-2. On your iPhone, open your ham radio app (e.g., APRS.fi, APRSDroid via Catalyst)
-3. Go to the app's Bluetooth settings
-4. Look for "PiBTBridge" (or your configured `device_name`)
-5. Connect - the bridge will automatically forward data to/from your TNC
-
-## Pairing Your TNC
-
-Before the bridge can connect to your TNC, you need to pair them:
-
-```bash
-# Start bluetoothctl
-bluetoothctl
-
-# Enable the agent
-agent on
-default-agent
-
-# Scan for devices
-scan on
-
-# When you see your TNC, pair with it
-pair 00:11:22:33:44:55
-
-# Trust the device for auto-reconnect
-trust 00:11:22:33:44:55
-
-# Exit
-exit
 ```
 
 ## Troubleshooting
@@ -164,13 +129,11 @@ exit
 ### Bridge won't start
 
 ```bash
-# Check if Bluetooth is enabled
-sudo systemctl status bluetooth
-
-# Ensure adapter is up
+# Check Bluetooth adapter
 sudo hciconfig hci0 up
+sudo rfkill unblock bluetooth
 
-# Check for errors
+# Check logs
 sudo journalctl -u bt-bridge -n 50
 ```
 
@@ -180,104 +143,90 @@ sudo journalctl -u bt-bridge -n 50
 # Verify TNC is paired
 bluetoothctl info 00:11:22:33:44:55
 
-# Check if TNC is in range and powered on
-bluetoothctl connect 00:11:22:33:44:55
+# Check RFCOMM channel
+sdptool browse 00:11:22:33:44:55
 ```
 
 ### iPhone can't see the bridge
 
 ```bash
-# Verify BLE advertising is working
+# Check BLE advertising
 sudo btmgmt info
 
-# Check daemon logs for BLE errors
+# Check logs for BLE errors
 sudo journalctl -u bt-bridge | grep -i ble
 ```
 
-### Connection drops frequently
-
-- Move the Pi closer to both the iPhone and TNC
-- Check for WiFi interference (2.4GHz)
-- Increase `reconnect_max_delay` in config if reconnection is too aggressive
-
 ## Development
 
-### Setting Up Development Environment
-
 ```bash
-# Clone the repo
-git clone https://github.com/youruser/pi-bt-bridge.git
+# Clone and setup
+git clone https://github.com/hemna/pi-bt-bridge.git
 cd pi-bt-bridge
-
-# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate
-
-# Install with dev dependencies
 pip install -e ".[dev]"
-```
 
-### Running Tests
-
-```bash
-# Run all tests
+# Run tests
 pytest
 
-# Run with coverage
-pytest --cov=src --cov-report=term-missing
-
-# Run specific test categories
-pytest -m unit          # Unit tests only
-pytest -m integration   # Integration tests only
-pytest -m contract      # Contract tests only
+# Deploy to Pi
+make deploy PI_HOST=pi@raspberrypi.local
 ```
 
-### Code Quality
-
-```bash
-# Linting
-ruff check src/ tests/
-
-# Type checking
-mypy src/
-
-# Auto-fix lint issues
-ruff check --fix src/ tests/
-```
+See [Development Guide](docs/development.md) for make targets and workflows.
 
 ## Architecture
 
 ```
 src/
-├── main.py              # Daemon entry point
-├── config.py            # Configuration management
+├── main.py                 # Daemon entry point
+├── config.py               # Configuration management
 ├── models/
-│   ├── state.py         # ConnectionState, BridgeState, ErrorEvent
-│   ├── kiss.py          # KISS protocol: KISSFrame, KISSParser
-│   └── connection.py    # BLEConnection, ClassicConnection
+│   ├── state.py            # ConnectionState, BridgeState
+│   ├── kiss.py             # KISS protocol parser
+│   └── connection.py       # Connection tracking
 ├── services/
-│   ├── ble_service.py   # BLE GATT server (Nordic UART Service)
+│   ├── ble_service.py      # BLE GATT server (Nordic UART)
 │   ├── classic_service.py  # BT Classic SPP client
-│   └── bridge.py        # Bidirectional frame bridging
-└── util/
-    └── logging.py       # Structured logging setup
+│   ├── bridge.py           # Bidirectional forwarding
+│   ├── pairing_agent.py    # D-Bus pairing agent
+│   ├── scanner_service.py  # Bluetooth device scanner
+│   └── web_service.py      # Web interface (aiohttp)
+└── web/
+    ├── models.py           # Web data models
+    ├── templates/          # Jinja2 HTML templates
+    └── static/             # CSS styles
 ```
 
 ## Protocol Details
 
 ### BLE Service (Nordic UART Service)
 
-- **Service UUID**: `6E400001-B5A3-F393-E0A9-E50E24DCCA9E`
-- **TX Characteristic** (write): `6E400002-B5A3-F393-E0A9-E50E24DCCA9E`
-- **RX Characteristic** (notify): `6E400003-B5A3-F393-E0A9-E50E24DCCA9E`
+| UUID | Description |
+|------|-------------|
+| `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` | Service UUID |
+| `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` | TX Characteristic (write) |
+| `6E400003-B5A3-F393-E0A9-E50E24DCCA9E` | RX Characteristic (notify) |
 
 ### KISS Protocol
 
-The bridge transparently forwards KISS frames without modification:
+The bridge transparently forwards KISS frames:
+
 - Frame delimiter: `0xC0` (FEND)
 - Escape character: `0xDB` (FESC)
 - Escaped FEND: `0xDB 0xDC`
 - Escaped FESC: `0xDB 0xDD`
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Installation Guide](docs/installation.md) | Detailed installation instructions |
+| [Configuration Reference](docs/configuration.md) | All configuration options |
+| [Web Interface Guide](docs/web-interface.md) | Using the web UI |
+| [API Reference](docs/api.md) | REST API documentation |
+| [Development Guide](docs/development.md) | Development workflow |
 
 ## License
 
@@ -290,7 +239,7 @@ Contributions are welcome! Please:
 1. Fork the repository
 2. Create a feature branch
 3. Write tests for new functionality
-4. Ensure all tests pass and linting is clean
+4. Ensure tests pass and linting is clean
 5. Submit a pull request
 
 ## Acknowledgments
