@@ -38,6 +38,10 @@ BT_BRIDGE_CONFIG=/home/pi/my-config.json sudo python3 -m src.main
 | `web_port` | int | `8080` | 1024-65535 | HTTP port for web interface |
 | `web_host` | string | `"0.0.0.0"` | IP address or hostname | Host to bind web interface to |
 | `history_file` | string | `"/etc/bt-bridge/tnc-history.json"` | Valid file path | Path to TNC history JSON file |
+| `tcp_kiss_enabled` | bool | `true` | true/false | Enable TCP KISS server for desktop apps |
+| `tcp_kiss_port` | int | `8001` | 1024-65535 | TCP KISS server listening port |
+| `tcp_kiss_host` | string | `"0.0.0.0"` | IP address or hostname | Host to bind TCP KISS server to |
+| `tcp_kiss_max_clients` | int | `5` | 1-20 | Maximum simultaneous TCP KISS connections |
 
 ## Option Details
 
@@ -145,6 +149,34 @@ The file persists across daemon restarts, allowing users to quickly switch betwe
 }
 ```
 
+### tcp_kiss_enabled
+
+Enable or disable the TCP KISS server. When enabled, desktop applications like Direwolf, APRSIS32, Xastir, and PinPoint APRS can connect to the bridge over TCP and share the TNC with BLE clients.
+
+Set to `false` if you only need the BLE bridge and don't want a TCP listener.
+
+### tcp_kiss_port
+
+TCP port for the KISS server. Default is `8001`. Desktop KISS applications connect to this port.
+
+**Note:** Changing the port requires a daemon restart.
+
+### tcp_kiss_host
+
+IP address to bind the TCP KISS server to:
+
+| Value | Description |
+|-------|-------------|
+| `"0.0.0.0"` | Listen on all interfaces (default) |
+| `"127.0.0.1"` | Listen only on localhost |
+| `"192.168.1.100"` | Listen on a specific interface |
+
+### tcp_kiss_max_clients
+
+Maximum number of simultaneous TCP KISS client connections. Default is `5`. When the limit is reached, new connections are rejected.
+
+Each connected client receives all frames from the TNC and can transmit frames. This allows multiple desktop applications to share the same radio simultaneously.
+
 ## Complete Example
 
 ```json
@@ -161,7 +193,11 @@ The file persists across daemon restarts, allowing users to quickly switch betwe
   "web_enabled": true,
   "web_port": 8080,
   "web_host": "0.0.0.0",
-  "history_file": "/etc/bt-bridge/tnc-history.json"
+  "history_file": "/etc/bt-bridge/tnc-history.json",
+  "tcp_kiss_enabled": true,
+  "tcp_kiss_port": 8001,
+  "tcp_kiss_host": "0.0.0.0",
+  "tcp_kiss_max_clients": 5
 }
 ```
 
@@ -177,6 +213,8 @@ The configuration is validated on load. Invalid configurations will prevent the 
 | `reconnect_max_delay` | Must be between 5 and 300 |
 | `rfcomm_channel` | Must be between 1 and 30 |
 | `web_port` | Must be between 1024 and 65535 |
+| `tcp_kiss_port` | Must be between 1024 and 65535 |
+| `tcp_kiss_max_clients` | Must be between 1 and 20 |
 
 ## Changing Configuration
 

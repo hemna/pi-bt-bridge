@@ -39,8 +39,9 @@ The main dashboard showing the current state of the bridge.
 |---------|-------------|
 | **BLE Connection** | Shows phone/app connection status, device name, MAC address, and connection time |
 | **Classic Connection** | Shows TNC connection status, target device, RFCOMM channel, and connection time |
+| **TCP KISS Server** | Shows server status (listening/stopped), bind address, port, connected client count, and per-client byte counters |
 | **Bridge Info** | Displays device name, uptime, start time, and version |
-| **Status Alerts** | Green alert when bridge is active (both sides connected), warning when disconnected |
+| **Status Alerts** | Green alert when bridge is active (both sides connected), with TCP KISS client count; warning when disconnected |
 | **Known TNCs** | List of previously paired TNC radios with quick-switch, edit, and remove controls |
 
 **Real-time Updates:**
@@ -67,6 +68,19 @@ Each device shows:
 | Last used | Relative timestamp (e.g., "2 hr ago") |
 | Active badge | Green badge if this is the currently connected TNC |
 | Not Paired badge | Red warning if the device is no longer Bluetooth-paired |
+
+**TCP KISS Server Card:**
+
+When the TCP KISS server is enabled, a card appears below the connection grid showing:
+
+| Detail | Description |
+|--------|-------------|
+| Status badge | "Listening" (green) when server is active, "Stopped" (grey) when inactive |
+| Bind address | The host:port the server is listening on (e.g., `0.0.0.0:8001`) |
+| Client count | Current connected clients vs. maximum (e.g., `2 / 5`) |
+| Client list | For each connected client: remote address and bytes RX/TX |
+
+The card uses a blue left border to distinguish it from the Bluetooth connection cards. The client list updates in real-time via SSE as clients connect and disconnect.
 
 ---
 
@@ -122,6 +136,12 @@ Configure bridge settings through a web form.
 | **RFCOMM Channel** | SPP channel number | 1-30 |
 | **Log Level** | Logging verbosity | DEBUG, INFO, WARNING, ERROR |
 | **HTTP Port** | Web interface port | 1024-65535 |
+| **TCP KISS Enabled** | Enable/disable TCP KISS server | Checkbox (changes require restart) |
+| **TCP KISS Bind Address** | Host to bind server to | `0.0.0.0` for all interfaces, `127.0.0.1` for localhost |
+| **TCP KISS Port** | TCP KISS listening port | 1024-65535 (default 8001, changes require restart) |
+| **TCP KISS Max Clients** | Maximum simultaneous connections | 1-20 (changes require restart) |
+
+The TCP KISS settings section is collapsible -- when the "Enable TCP KISS Server" checkbox is unchecked, the bind address, port, and max clients fields are hidden.
 
 **Actions:**
 
@@ -157,7 +177,7 @@ View packet statistics and throughput metrics.
 
 **Connection Status:**
 
-Shows current BLE and Classic connection states with color-coded badges.
+Shows current BLE, Classic, and TCP KISS connection states with color-coded badges. The TCP KISS row shows the server status (Listening/Stopped), port number, and connected client count.
 
 **Auto-Refresh:**
 
