@@ -219,6 +219,9 @@ class WebService:
         self._app.router.add_post(
             "/api/tnc-history/{address}/select", self._handle_api_tnc_history_select
         )
+        self._app.router.add_post(
+            "/api/tnc-history/{address}/connect", self._handle_api_tnc_history_connect
+        )
 
         # Static files
         self._app.router.add_static("/static", STATIC_DIR, name="static")
@@ -631,7 +634,8 @@ class WebService:
     def _device_to_response(self, device: TNCDevice) -> dict[str, Any]:
         """Convert TNCDevice to API response dict with runtime fields.
 
-        Adds is_current and is_paired fields that depend on runtime state.
+        Adds is_current, is_paired, and connection_state fields that
+        depend on runtime state.
 
         Args:
             device: TNCDevice to convert.
@@ -641,9 +645,24 @@ class WebService:
         """
         data = device.to_dict()
         data["display_name"] = device.display_name
-        data["is_current"] = device.address == self.config.target_address.upper()
+        is_current = device.address == self.config.target_address.upper()
+        data["is_current"] = is_current
         # Check paired status via BlueZ (best-effort)
         data["is_paired"] = self._check_device_paired(device.address)
+
+        # Include Classic connection state for the active TNC
+        if is_current and self._classic_service is not None:
+            conn = self._classic_service.connection
+            data["connection_state"] = conn.state.value
+            data["is_connected"] = self._classic_service.is_connected
+            data["last_error"] = conn.last_error
+            data["reconnect_attempts"] = conn.reconnect_attempts
+        else:
+            data["connection_state"] = None
+            data["is_connected"] = False
+            data["last_error"] = None
+            data["reconnect_attempts"] = 0
+
         return data
 
     def _check_device_paired(self, address: str) -> bool:
@@ -910,6 +929,55 @@ class WebService:
                 "message": "TNC selected, connecting...",
                 "device": self._device_to_response(device),
                 "connecting": True,
+            }
+        )
+
+    async def _handle_api_tnc_history_connect(self, request: web.Request) -> web.Response:
+        """Handle POST /api/tnc-history/{address}/connect - Force immediate connection attempt.
+
+        Cancels any pending backoff timer and initiates a new connection
+        right away.  Only works for the currently active TNC.
+        """
+        address = request.match_info["address"]
+        device = self._tnc_history.get(address)
+
+        if device is None:
+            return web.json_response(
+                {"success": False, "message": "TNC not found in history"},
+                status=404,
+            )
+
+        # Only allow connecting to the currently active TNC
+        if address.upper() != self.config.target_address.upper():
+            return web.json_response(
+                {
+                    "success": False,
+                    "message": "Can only connect to the currently active TNC. Select it first.",
+                },
+                status=400,
+            )
+
+        if self._classic_service is None:
+            return web.json_response(
+                {"success": False, "message": "Classic service not available"},
+                status=503,
+            )
+
+        # Already connected?
+        if self._classic_service.is_connected:
+            return web.json_response(
+                {"success": True, "message": "Already connected", "already_connected": True}
+            )
+
+        # Force immediate reconnect
+        asyncio.create_task(self._classic_service.reconnect_now())
+        logger.info("Manual connect triggered for %s (%s)", device.display_name, device.address)
+
+        return web.json_response(
+            {
+                "success": True,
+                "message": "Connecting...",
+                "device": self._device_to_response(device),
             }
         )
 

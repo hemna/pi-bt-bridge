@@ -180,6 +180,45 @@ class ClassicService:
         # Restart connection to new target
         await self.start()
 
+    async def reconnect_now(self) -> None:
+        """Force an immediate reconnection attempt.
+
+        Cancels any pending backoff timer, resets the reconnect counter,
+        and initiates a new connection right away.  No-op if already
+        connected.
+        """
+        if self.is_connected:
+            logger.info("Already connected, ignoring reconnect_now()")
+            return
+
+        logger.info("Manual reconnect requested for %s", self._target_address)
+
+        # Cancel any pending backoff sleep
+        if self._reconnect_task:
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
+            self._reconnect_task = None
+
+        # Close stale socket if any
+        if self._socket:
+            try:
+                self._socket.close()
+            except OSError:
+                pass
+            self._socket = None
+
+        # Reset backoff counter so we start fresh
+        self._connection.reconnect_attempts = 0
+        self._connection.last_error = None
+
+        # Make sure we're marked as running
+        self._running = True
+
+        await self._connect()
+
     async def send_data(self, data: bytes) -> None:
         """
         Send data to connected TNC.

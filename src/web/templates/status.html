@@ -164,6 +164,8 @@ async function loadTNCHistory() {
         data.devices.forEach(function(device) {
             const isCurrent = device.is_current;
             const isPaired = device.is_paired;
+            const isConnected = device.is_connected;
+            const connState = device.connection_state;
             const lastUsed = device.last_used
                 ? formatRelativeTime(device.last_used)
                 : 'Never used';
@@ -171,8 +173,18 @@ async function loadTNCHistory() {
             html += '<li class="device-item' + (isCurrent ? ' current' : '') + '">';
             html += '  <div class="device-info">';
             html += '    <span class="device-name">' + escapeHtml(device.display_name) + '</span>';
+
+            // Connection state badge for the active TNC
             if (isCurrent) {
-                html += ' <span class="status-badge connected" style="font-size: 0.75rem; padding: 0.125rem 0.5rem;">Active</span>';
+                if (isConnected) {
+                    html += ' <span class="status-badge connected" style="font-size: 0.75rem; padding: 0.125rem 0.5rem;">Connected</span>';
+                } else if (connState === 'connecting') {
+                    html += ' <span class="status-badge connecting" style="font-size: 0.75rem; padding: 0.125rem 0.5rem;">Connecting</span>';
+                } else if (connState === 'error') {
+                    html += ' <span class="status-badge error" style="font-size: 0.75rem; padding: 0.125rem 0.5rem;">Error</span>';
+                } else {
+                    html += ' <span class="status-badge idle" style="font-size: 0.75rem; padding: 0.125rem 0.5rem;">Disconnected</span>';
+                }
             }
             if (!isPaired) {
                 html += ' <span class="status-badge error" style="font-size: 0.75rem; padding: 0.125rem 0.5rem;">Not Paired</span>';
@@ -181,9 +193,26 @@ async function loadTNCHistory() {
             html += '    <span class="text-muted" style="font-size: 0.75rem; margin-left: 0.5rem;">CH ' + device.rfcomm_channel + '</span>';
             var protoLabel = device.protocol === 'kiss' ? 'KISS' : (device.protocol === 'hdlc' ? 'HDLC' : 'Auto');
             html += '    <span class="text-muted" style="font-size: 0.75rem; margin-left: 0.25rem;">' + protoLabel + '</span>';
+
+            // Show error detail for active TNC
+            if (isCurrent && device.last_error && !isConnected) {
+                html += '    <br><span style="font-size: 0.75rem; color: var(--error-color);">' + escapeHtml(device.last_error) + '</span>';
+                if (device.reconnect_attempts > 0) {
+                    html += ' <span class="text-muted" style="font-size: 0.75rem;">(retry #' + device.reconnect_attempts + ')</span>';
+                }
+            }
+
             html += '    <br><span class="text-muted" style="font-size: 0.75rem;">' + lastUsed + '</span>';
             html += '  </div>';
             html += '  <div style="display: flex; gap: 0.25rem; flex-wrap: wrap;">';
+
+            // Connect button for the active TNC when not connected
+            if (isCurrent && !isConnected && isPaired) {
+                var connectLabel = connState === 'connecting' ? 'Connecting...' : 'Connect';
+                var connectDisabled = connState === 'connecting' ? ' disabled' : '';
+                html += '    <button class="btn btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;"' + connectDisabled + ' onclick="connectTNC(\'' + escapeHtml(device.address) + '\')">' + connectLabel + '</button>';
+            }
+
             if (!isCurrent) {
                 html += '    <button class="btn btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;" onclick="selectTNC(\'' + escapeHtml(device.address) + '\')"' + (isPaired ? '' : ' disabled title="Pair this device first"') + '>Select</button>';
             }
@@ -224,6 +253,32 @@ async function selectTNC(address) {
         }
     } catch (err) {
         alert('Error selecting TNC: ' + err.message);
+    }
+}
+
+/**
+ * Force an immediate connection attempt to the active TNC.
+ */
+async function connectTNC(address) {
+    try {
+        const resp = await fetch('/api/tnc-history/' + encodeURIComponent(address) + '/connect', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+        });
+        const data = await resp.json();
+
+        if (resp.ok && data.success) {
+            // Refresh TNC list to show "Connecting..." state
+            loadTNCHistory();
+            // Poll for connection state updates
+            setTimeout(loadTNCHistory, 2000);
+            setTimeout(loadTNCHistory, 5000);
+            setTimeout(loadTNCHistory, 10000);
+        } else {
+            alert('Failed to connect: ' + (data.message || 'Unknown error'));
+        }
+    } catch (err) {
+        alert('Error connecting to TNC: ' + err.message);
     }
 }
 
@@ -360,6 +415,7 @@ if (typeof EventSource !== 'undefined') {
 /**
  * Update the status page DOM from an SSE status event.
  */
+var _lastClassicState = null;
 function updateStatusUI(status) {
     // Update BLE card
     const bleCard = document.querySelector('.connection-card:nth-child(1)');
@@ -383,6 +439,13 @@ function updateStatusUI(status) {
             classicBadge.className = 'status-badge ' + status.classic.state;
             classicBadge.textContent = status.classic.state.charAt(0).toUpperCase() + status.classic.state.slice(1);
         }
+    }
+
+    // Refresh TNC list when classic connection state changes
+    // so the Connect/Connected badge updates in real time
+    if (status.classic.state !== _lastClassicState) {
+        _lastClassicState = status.classic.state;
+        loadTNCHistory();
     }
 
     // Update uptime
