@@ -16,7 +16,7 @@ import jinja2
 from aiohttp import web
 
 from src.config import DEFAULT_CONFIG_PATH, ConfigurationError, save_config
-from src.models.tnc_history import TNCDevice, TNCHistory
+from src.models.tnc_history import TNCDevice, TNCHistory, TNCProtocol
 from src.services.scanner_service import get_pairing_manager
 from src.util.logging import get_logger
 from src.web.models import (
@@ -30,6 +30,7 @@ from src.web.models import (
 if TYPE_CHECKING:
     from src.config import Configuration
     from src.models.state import BridgeState
+    from src.services.bridge import BridgeService
     from src.services.classic_service import ClassicService
 
 logger = get_logger("web_service")
@@ -66,6 +67,7 @@ class WebService:
         config: Configuration,
         bridge_state: BridgeState | None = None,
         classic_service: ClassicService | None = None,
+        bridge_service: BridgeService | None = None,
     ) -> None:
         """
         Initialize the web service.
@@ -76,12 +78,14 @@ class WebService:
             config: Bridge configuration.
             bridge_state: Runtime bridge state for status display.
             classic_service: Classic SPP service for live target switching.
+            bridge_service: Bridge service for protocol switching on TNC change.
         """
         self.host = host
         self.port = port
         self.config = config
         self.bridge_state = bridge_state
         self._classic_service = classic_service
+        self._bridge_service = bridge_service
 
         # Runtime state
         self._app: web.Application | None = None
@@ -795,6 +799,16 @@ class WebService:
                     status=400,
                 )
 
+        if "protocol" in data:
+            try:
+                device.protocol = TNCProtocol(data["protocol"])
+            except ValueError:
+                valid = ", ".join(p.value for p in TNCProtocol)
+                return web.json_response(
+                    {"success": False, "message": f"protocol must be one of: {valid}"},
+                    status=400,
+                )
+
         try:
             self._tnc_history.add(device)
         except OSError as e:
@@ -882,6 +896,11 @@ class WebService:
             logger.info("Live-switching to TNC: %s (%s)", device.display_name, device.address)
         else:
             logger.warning("No classic service available, restart required for target change")
+
+        # Update bridge protocol mode for the new TNC
+        if self._bridge_service is not None:
+            self._bridge_service.set_tnc_protocol(device.protocol)
+            logger.info("Bridge protocol set to %s for %s", device.protocol.value, device.address)
 
         logger.info("TNC selected: %s (%s)", device.display_name, device.address)
 

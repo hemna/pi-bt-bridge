@@ -11,6 +11,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Final
 
@@ -32,6 +33,23 @@ MAC_PATTERN: Final[re.Pattern[str]] = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa
 MAX_FRIENDLY_NAME_LENGTH: Final[int] = 50
 
 
+class TNCProtocol(Enum):
+    """Protocol framing used by the TNC over Bluetooth SPP.
+
+    KISS: Standard KISS framing with 0xC0 (FEND) delimiters.
+        Used by most TNCs (TH-D74, Mobilinkd, etc.).
+    HDLC: AX.25 HDLC-style framing with 0x7E flag delimiters.
+        Used by some radios (VGC VR-N7600) that send raw HDLC
+        frames rather than KISS-wrapped data.
+    AUTO: Auto-detect on first received data from the TNC.
+        Looks at the first delimiter byte to determine protocol.
+    """
+
+    KISS = "kiss"
+    HDLC = "hdlc"
+    AUTO = "auto"
+
+
 @dataclass
 class TNCDevice:
     """A known TNC radio device.
@@ -41,6 +59,7 @@ class TNCDevice:
         bluetooth_name: Device name from Bluetooth discovery.
         friendly_name: User-assigned display name (optional).
         rfcomm_channel: RFCOMM channel for SPP connection (1-30).
+        protocol: Framing protocol (kiss, hdlc, or auto-detect).
         last_used: Timestamp of last successful connection.
         added_at: Timestamp when first added to history.
     """
@@ -49,6 +68,7 @@ class TNCDevice:
     bluetooth_name: str
     friendly_name: str | None = None
     rfcomm_channel: int = 2
+    protocol: TNCProtocol = TNCProtocol.AUTO
     last_used: datetime | None = None
     added_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -102,6 +122,7 @@ class TNCDevice:
             "bluetooth_name": self.bluetooth_name,
             "friendly_name": self.friendly_name,
             "rfcomm_channel": self.rfcomm_channel,
+            "protocol": self.protocol.value,
             "last_used": self.last_used.isoformat() if self.last_used else None,
             "added_at": self.added_at.isoformat(),
         }
@@ -125,11 +146,19 @@ class TNCDevice:
         last_used = datetime.fromisoformat(last_used_str) if last_used_str else None
         added_at = datetime.fromisoformat(added_at_str) if added_at_str else datetime.now(UTC)
 
+        # Parse protocol (default to AUTO for backwards compat with old history files)
+        protocol_str = data.get("protocol", "auto")
+        try:
+            protocol = TNCProtocol(protocol_str)
+        except ValueError:
+            protocol = TNCProtocol.AUTO
+
         return cls(
             address=str(data.get("address", "")),
             bluetooth_name=str(data.get("bluetooth_name", "")),
             friendly_name=data.get("friendly_name"),
             rfcomm_channel=int(data.get("rfcomm_channel", 2)),
+            protocol=protocol,
             last_used=last_used,
             added_at=added_at,
         )
