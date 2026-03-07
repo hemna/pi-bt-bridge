@@ -39,33 +39,6 @@
     </div>
     
     <div class="card">
-        <h3>Logging</h3>
-        
-        <div class="form-group">
-            <label for="log_level">Log Level</label>
-            <select id="log_level" name="log_level">
-                <option value="DEBUG" {% if config.log_level == 'DEBUG' %}selected{% endif %}>Debug</option>
-                <option value="INFO" {% if config.log_level == 'INFO' %}selected{% endif %}>Info</option>
-                <option value="WARNING" {% if config.log_level == 'WARNING' %}selected{% endif %}>Warning</option>
-                <option value="ERROR" {% if config.log_level == 'ERROR' %}selected{% endif %}>Error</option>
-            </select>
-        </div>
-    </div>
-    
-    <div class="card">
-        <h3>Web Interface</h3>
-        
-        <div class="form-group">
-            <label for="web_port">HTTP Port</label>
-            <input type="number" id="web_port" name="web_port"
-                   value="{{ config.web_port }}"
-                   min="1024" max="65535"
-                   required>
-            <p class="hint">Port for web interface (requires restart)</p>
-        </div>
-    </div>
-    
-    <div class="card">
         <h3>TCP KISS Server</h3>
         <p class="hint" style="margin-bottom: 1rem;">KISS-over-TCP server for apps like Direwolf, APRSIS32, Xastir, PinPoint APRS. Changes require restart.</p>
         
@@ -104,6 +77,33 @@
                     <p class="hint">1-20</p>
                 </div>
             </div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>Logging</h3>
+        
+        <div class="form-group">
+            <label for="log_level">Log Level</label>
+            <select id="log_level" name="log_level">
+                <option value="DEBUG" {% if config.log_level == 'DEBUG' %}selected{% endif %}>Debug</option>
+                <option value="INFO" {% if config.log_level == 'INFO' %}selected{% endif %}>Info</option>
+                <option value="WARNING" {% if config.log_level == 'WARNING' %}selected{% endif %}>Warning</option>
+                <option value="ERROR" {% if config.log_level == 'ERROR' %}selected{% endif %}>Error</option>
+            </select>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>Web Interface</h3>
+        
+        <div class="form-group">
+            <label for="web_port">HTTP Port</label>
+            <input type="number" id="web_port" name="web_port"
+                   value="{{ config.web_port }}"
+                   min="1024" max="65535"
+                   required>
+            <p class="hint">Port for web interface (requires restart)</p>
         </div>
     </div>
     
